@@ -1,0 +1,785 @@
+ĐẶC TẢ HỆ THỐNG PHẦN MỀM
+HỆ THỐNG ĐIỂM DANH BẰNG NHẬN DIỆN KHUÔN MẶT
+MỤC LỤC NỘI DUNG
+1. Tổng quan và phạm vi dự án
+2. Mục tiêu và yêu cầu hệ thống
+3. Đối tượng sử dụng và phân quyền
+4. Kiến trúc tổng thể
+5. Technology Stack
+6. Use Case và Business Rules
+7. Luồng nhận diện khuôn mặt
+8. Thiết kế cơ sở dữ liệu
+9. API Specification
+10. WebSocket và xử lý realtime
+11. Authentication, Authorization và Security
+12. Quản lý ảnh và dữ liệu sinh trắc học
+13. Cache, Rate Limiting và hiệu năng
+14. Xử lý lỗi và trạng thái
+15. Logging, Audit và Monitoring
+16. Testing và đánh giá AI
+17. Deployment và vận hành
+18. Cấu trúc source code đề xuất
+19. Quy trình phát triển
+20. Checklist hoàn thiện project
+1. TỔNG QUAN VÀ PHẠM VI DỰ ÁN
+Đề tài là hệ thống quản lý điểm danh kết hợp trí tuệ nhân tạo, sử dụng nhận diện khuôn mặt để tự động hóa điểm danh trong lớp học quy mô nhỏ và vừa. Hệ thống hỗ trợ đăng ký khuôn mặt, mở phiên điểm danh, nhận diện realtime qua webcam, kiểm duyệt trường hợp độ tin cậy thấp, khiếu nại và báo cáo điểm danh.
+1.1 Phạm vi
+Quản lý tài khoản Student, Teacher và Admin.
+Quản lý lớp học và danh sách sinh viên.
+Đăng ký và cập nhật Face Embedding.
+Tạo và đóng Attendance Session.
+Nhận diện khuôn mặt realtime và tạo Attendance Log.
+Kiểm duyệt kết quả AI có confidence thấp/trung bình.
+Cho phép sinh viên khiếu nại và giảng viên xử lý.
+Xuất báo cáo CSV/Excel.
+Áp dụng JWT/RBAC, rate limiting, audit log và các cơ chế bảo mật.
+1.2 Ngoài phạm vi giai đoạn đầu
+Không coi nhận diện khuôn mặt là bằng chứng tuyệt đối; các trường hợp không chắc chắn phải có cơ chế review.
+Không yêu cầu nhận diện quy mô hàng triệu khuôn mặt trong phiên đầu tiên.
+Anti-spoofing/liveness là thành phần cần thiết cho production và có thể triển khai theo Phase 2 nếu đồ án giới hạn thời gian.
+2. MỤC TIÊU VÀ YÊU CẦU HỆ THỐNG
+2.1 Functional Requirements
+Mã
+Yêu cầu
+FR-01
+Đăng nhập và xác thực người dùng.
+FR-02
+Đăng ký 5–10 mẫu khuôn mặt từ webcam.
+FR-03
+Trích xuất và lưu Face Embedding.
+FR-04
+Teacher tạo/quản lý lớp.
+FR-05
+Teacher tạo Attendance Session.
+FR-06
+Nhận diện realtime qua webcam.
+FR-07
+Tự động xác nhận kết quả confidence >= 85%.
+FR-08
+Đưa kết quả 60%–<85% vào hàng chờ review.
+FR-09
+Từ chối kết quả <60%.
+FR-10
+Chống duplicate attendance trong cùng session.
+FR-11
+Student xem lịch sử và gửi khiếu nại.
+FR-12
+Teacher duyệt khiếu nại.
+FR-13
+Xuất CSV/Excel.
+FR-14
+Admin quản lý user và role.
+2.2 Non-functional Requirements
+Bảo mật: password hash, JWT, RBAC, rate limiting, validation và audit log.
+Hiệu năng: không truy vấn MySQL cho từng frame; embedding được cache phù hợp.
+Độ tin cậy: lỗi một frame không làm chết session.
+Khả năng mở rộng: AI service có thể tách khỏi API service.
+Khả năng bảo trì: phân tách router/service/repository/model/schema.
+Khả năng quan sát: structured logging và health check.
+3. ĐỐI TƯỢNG SỬ DỤNG VÀ PHÂN QUYỀN
+Chức năng
+Student
+Teacher
+Admin
+Đăng nhập
+✓
+✓
+✓
+Đăng ký khuôn mặt
+✓
+Xem lịch sử điểm danh
+✓
+✓
+✓
+Khiếu nại
+✓
+Quản lý lớp
+✓
+Tạo/đóng session
+✓
+Realtime attendance
+✓
+Approve/Reject review
+✓
+Duyệt khiếu nại
+✓
+Xuất báo cáo
+✓
+✓
+Quản lý user
+✓
+Phân quyền
+✓
+4. KIẾN TRÚC TỔNG THỂ
+Kiến trúc khuyến nghị:
+Thành phần
+Vai trò
+Frontend
+Giao diện Student/Teacher/Admin; webcam; dashboard; WebSocket client.
+FastAPI Backend
+REST API, authentication, authorization, business logic, WebSocket.
+AI Service/Module
+Face detection, alignment, embedding, similarity và tùy chọn liveness.
+MySQL
+Dữ liệu nghiệp vụ, user, class, session, attendance, complaint.
+Redis
+Rate limiting, cache, session/temporary state và lock khi cần.
+Object Storage
+Ảnh minh chứng/ảnh đăng ký; production nên dùng storage riêng.
+Worker/Queue
+Tùy chọn cho tác vụ AI/export nặng, không block request.
+Luồng chính: Frontend → FastAPI → AI → Database/Cache/Storage → Frontend.
+5. TECHNOLOGY STACK
+Layer
+Công nghệ đề xuất
+Mục đích
+Backend
+Python + FastAPI
+REST API/WebSocket
+ORM
+SQLAlchemy
+Mapping CSDL
+Validation
+Pydantic
+Request/Response schema
+Migration
+Alembic
+Version hóa schema
+Database
+MySQL
+Dữ liệu nghiệp vụ
+Cache
+Redis
+Rate limit/cache/lock
+Auth
+JWT + password hashing
+Authentication
+Computer Vision
+OpenCV
+Camera/image preprocessing
+Face AI
+InsightFace/ArcFace hoặc model tương đương
+Detection/embedding/recognition
+Vector
+NumPy; FAISS khi cần
+Similarity search
+Frontend
+React + TypeScript
+UI
+Styling
+Tailwind CSS hoặc CSS module
+Giao diện
+Realtime
+WebSocket
+Attendance realtime
+Deployment
+Docker + Docker Compose + Nginx
+Đóng gói/vận hành
+Testing
+Pytest + API integration tests
+Kiểm thử
+6. USE CASE VÀ BUSINESS RULES
+6.1 Student
+Mã
+Use Case
+Điều kiện/Kết quả
+STU_01
+Login
+Sai thông tin → 401; quá nhiều lần → 429.
+STU_02
+Register Face
+5–10 ảnh; validate quality; tạo/cập nhật embedding.
+STU_03
+Attendance History
+Chỉ xem dữ liệu của chính mình.
+STU_04
+Complaint
+Chỉ khiếu nại session hợp lệ; trạng thái pending/approved/rejected.
+6.2 Teacher
+Mã
+Use Case
+Điều kiện/Kết quả
+TEA_01
+Class Management
+Teacher chỉ quản lý lớp thuộc mình.
+TEA_02
+Create Session
+Không tạo session trùng trạng thái active cho cùng lớp.
+TEA_03
+Realtime Attendance
+Chỉ nhận diện sinh viên thuộc lớp/session.
+TEA_04
+AI Review
+Approve/Reject kết quả pending.
+TEA_05
+Complaint Review
+Approve/Reject complaint và ghi note.
+TEA_06
+Report
+Xuất dữ liệu theo session/lớp/khoảng thời gian.
+6.3 Admin
+Mã
+Use Case
+ADM_01
+Create/update/lock/unlock users.
+ADM_02
+Gán role và kiểm soát quyền.
+ADM_03
+Xem audit log và tình trạng hệ thống.
+6.4 Business Rules điểm danh
+Confidence >= 85%: tự động approved và tạo attendance chính thức.
+60% <= confidence < 85%: tạo kết quả pending để Teacher review.
+Confidence < 60%: không tạo attendance chính thức.
+Một student chỉ có tối đa một attendance log chính thức trong một session.
+Attendance status: present, late, absent.
+Review status: pending, approved, rejected.
+Late phải được xác định bằng cấu hình session; ví dụ lateAfter.
+Không cho phép student thuộc lớp khác được nhận diện thành thành viên của session.
+7. LUỒNG NHẬN DIỆN KHUÔN MẶT
+Frontend xin quyền webcam và lấy frame với tần suất phù hợp; không nhất thiết gửi mọi frame.
+Backend/AI phát hiện khuôn mặt.
+Kiểm tra chất lượng và tùy chọn liveness.
+Alignment/preprocessing khuôn mặt.
+Model tạo embedding.
+Chuẩn hóa embedding nếu model yêu cầu.
+Tìm vector gần nhất trong tập sinh viên của lớp.
+Tính similarity và chuyển thành confidence theo quy ước của hệ thống.
+Áp dụng ngưỡng 85% / 60%.
+Kiểm tra duplicate bằng sessionId + studentId.
+Ghi attendance hoặc tạo review record.
+Gửi kết quả realtime về Teacher qua WebSocket.
+7.1 Lưu ý về confidence
+85% và 60% trong đặc tả là ngưỡng nghiệp vụ ban đầu. Trước production cần hiệu chỉnh bằng dataset thực tế và đo False Accept/False Reject. Không nên giả định cosine similarity tự động tương đương phần trăm xác suất; hệ thống cần định nghĩa rõ cách mapping score → confidence.
+7.2 Liveness / Anti-spoofing
+Production nên có kiểm tra chống ảnh/video giả mạo.
+Có thể dùng blink/head movement/texture/depth hoặc model anti-spoofing chuyên dụng.
+Nếu liveness fail: không tạo attendance.
+Log kết quả liveness riêng nếu cần audit.
+8. THIẾT KẾ CƠ SỞ DỮ LIỆU
+8.1 Users
+Column
+Type
+Key
+Mô tả
+userId
+INT
+PK AI
+ID
+username
+VARCHAR(50)
+UNIQUE
+Tên đăng nhập
+passwordHash
+VARCHAR(255)
+Hash mật khẩu
+role
+VARCHAR(20)
+student/teacher/admin
+fullName
+VARCHAR(100)
+Họ tên
+email
+VARCHAR(100)
+UNIQUE khuyến nghị
+Email
+isActive
+BOOLEAN
+Khóa/mở tài khoản
+createdAt
+DATETIME
+Ngày tạo
+updatedAt
+DATETIME
+Ngày cập nhật
+8.2 FaceData
+Column
+Type
+Key
+Mô tả
+faceId
+INT
+PK AI
+ID
+userId
+INT
+FK Users
+Chủ sở hữu
+encodingData
+JSON/TEXT/BLOB
+Embedding
+modelName
+VARCHAR(100)
+Tên/version model
+embeddingDimension
+INT
+Ví dụ 512
+qualityScore
+FLOAT
+Điểm chất lượng mẫu
+imagePath
+VARCHAR(500)
+Ảnh đăng ký nếu cần
+isActive
+BOOLEAN
+Mẫu đang dùng
+createdAt
+DATETIME
+updatedAt
+DATETIME
+8.3 Classes / ClassStudents
+Bảng
+Cột chính
+Classes
+classId PK, className, teacherId FK, createdAt, updatedAt
+ClassStudents
+classId PK/FK, studentId PK/FK, joinedAt
+8.4 AttendanceSessions
+Column
+Type
+Mô tả
+sessionId
+INT PK
+ID session
+classId
+INT FK
+Lớp
+startTime
+DATETIME
+Bắt đầu
+endTime
+DATETIME
+Kết thúc
+lateAfter
+DATETIME hoặc offset
+Mốc đi trễ
+status
+VARCHAR(20)
+active/closed
+createdBy
+INT FK
+Teacher
+createdAt
+DATETIME
+8.5 AttendanceLogs
+Column
+Type
+Mô tả
+logId
+INT PK
+ID
+sessionId
+INT FK
+Session
+studentId
+INT FK
+Student
+checkInTime
+DATETIME
+Thời điểm nhận diện
+confidenceScore
+FLOAT
+Score
+capturedImage
+VARCHAR(500)
+Đường dẫn object storage
+status
+VARCHAR(20)
+present/late/absent
+reviewStatus
+VARCHAR(20)
+pending/approved/rejected
+livenessScore
+FLOAT NULL
+Tùy chọn
+createdAt
+DATETIME
+8.6 ConsensusRequests
+Column
+Type
+Mô tả
+requestId
+INT PK
+ID
+sessionId
+INT FK
+Session
+studentId
+INT FK
+Người gửi
+reason
+TEXT
+Lý do
+requestStatus
+VARCHAR(20)
+pending/approved/rejected
+teacherNote
+TEXT
+Ghi chú
+createdAt
+DATETIME
+resolvedAt
+DATETIME
+8.7 Bảng bổ sung
+Bảng
+Mục đích
+RefreshTokens
+Quản lý refresh token, revoke/logout.
+AuditLogs
+Theo dõi thao tác nhạy cảm.
+Notifications
+Thông báo cho người dùng nếu triển khai.
+8.8 Constraints/Index bắt buộc
+UNIQUE(sessionId, studentId) trên AttendanceLogs cho attendance chính thức, hoặc cơ chế equivalent nếu cần lưu nhiều attempt.
+INDEX AttendanceLogs(sessionId), AttendanceLogs(studentId), AttendanceLogs(checkInTime).
+INDEX ClassStudents(studentId), ClassStudents(classId).
+INDEX ConsensusRequests(sessionId, requestStatus).
+Foreign key có ON DELETE/UPDATE policy rõ ràng.
+9. API SPECIFICATION
+Method
+Endpoint
+Role
+Mục đích
+POST
+/api/v1/auth/login
+All
+Login
+POST
+/api/v1/auth/refresh
+All
+Refresh access token
+POST
+/api/v1/auth/logout
+All
+Revoke refresh token
+GET
+/api/v1/users/me
+All
+Current user
+POST
+/api/v1/faces/register
+Student
+Đăng ký khuôn mặt
+PUT
+/api/v1/faces
+Student
+Cập nhật khuôn mặt
+GET
+/api/v1/attendance/history
+Student
+Lịch sử
+POST
+/api/v1/complaints
+Student
+Tạo khiếu nại
+GET
+/api/v1/classes
+Teacher
+Danh sách lớp
+POST
+/api/v1/classes
+Teacher
+Tạo lớp
+POST
+/api/v1/classes/{id}/students
+Teacher
+Thêm student
+DELETE
+/api/v1/classes/{id}/students/{studentId}
+Teacher
+Xóa student
+POST
+/api/v1/sessions
+Teacher
+Tạo session
+POST
+/api/v1/sessions/{id}/close
+Teacher
+Đóng session
+GET
+/api/v1/sessions/{id}/attendance
+Teacher
+Danh sách điểm danh
+POST
+/api/v1/attendance/{id}/approve
+Teacher
+Approve review
+POST
+/api/v1/attendance/{id}/reject
+Teacher
+Reject review
+GET
+/api/v1/complaints
+Teacher
+Danh sách khiếu nại
+POST
+/api/v1/complaints/{id}/approve
+Teacher
+Approve complaint
+POST
+/api/v1/complaints/{id}/reject
+Teacher
+Reject complaint
+GET
+/api/v1/reports/attendance
+Teacher/Admin
+Báo cáo
+GET
+/api/v1/users
+Admin
+Quản lý user
+PATCH
+/api/v1/users/{id}
+Admin
+Cập nhật/khóa user
+9.1 Response chuẩn
+Nên thống nhất response có requestId để truy vết:
+{"success": true, "data": {...}, "message": "OK", "requestId": "..."}
+Lỗi: {'success': false, 'error': {'code': '...', 'message': '...'}, 'requestId': '...'}
+10. WEBSOCKET VÀ REALTIME
+Endpoint đề xuất: /api/v1/ws/sessions/{sessionId}
+Client xác thực trước khi mở WebSocket.
+Server kiểm tra Teacher có quyền với session.
+Frame có thể được gửi theo sampling rate; không nên gửi vô hạn.
+Server trả event attendance_detected, review_required, session_status, error.
+Server phải debounce/cooldown cùng một khuôn mặt để giảm xử lý lặp.
+Session đóng → server gửi session_closed và từ chối frame mới.
+Ví dụ event: {event: 'attendance_detected', studentId: 123, confidence: 91.2, status: 'present', timestamp: '...'}
+11. AUTHENTICATION, AUTHORIZATION VÀ SECURITY
+11.1 Authentication
+Password không bao giờ lưu plaintext; dùng password hashing hiện đại.
+Access token ngắn hạn, refresh token dài hơn.
+Refresh token nên lưu dạng hash nếu lưu server-side.
+Logout phải revoke refresh token.
+11.2 Authorization
+Kiểm tra role ở API layer.
+Kiểm tra resource ownership: Teacher chỉ thao tác lớp/session của mình.
+Student chỉ đọc dữ liệu của chính mình.
+Không dựa vào role ở frontend để bảo mật; backend là nơi quyết định quyền.
+11.3 Rate limiting
+Endpoint
+Gợi ý
+POST /auth/login
+Giới hạn theo IP + username; ví dụ 5 lần/60 giây rồi cooldown.
+POST /faces/register
+Giới hạn theo user/IP.
+WebSocket
+Giới hạn số connection/session và frame rate.
+Report export
+Giới hạn request và kích thước khoảng thời gian.
+Redis là lựa chọn phù hợp để lưu counter/rate-limit state khi chạy nhiều instance.
+11.4 Security checklist
+CORS chỉ cho phép origin hợp lệ.
+HTTPS trong production.
+Validate file upload và giới hạn kích thước.
+Không log password, JWT hoặc raw face embedding.
+Không trả embedding về frontend.
+Secrets đặt trong environment/secret manager, không commit vào Git.
+SQLAlchemy parameterization/ORM; không nối chuỗi SQL từ input.
+Security headers và CSRF strategy phù hợp kiến trúc cookie/token.
+12. QUẢN LÝ ẢNH VÀ DỮ LIỆU SINH TRẮC HỌC
+Ảnh và embedding là dữ liệu nhạy cảm; chỉ lưu thứ thực sự cần.
+Development có thể lưu local uploads; production nên dùng private object storage.
+Database chỉ lưu object key/path, không nên nhét ảnh binary lớn vào bảng nghiệp vụ.
+Thiết lập retention: thời gian lưu ảnh minh chứng/ảnh đăng ký phải được quyết định trước triển khai.
+Cho phép cập nhật/xóa dữ liệu khuôn mặt theo chính sách của hệ thống.
+Audit các thao tác đăng ký, thay đổi và xóa FaceData.
+13. CACHE, RATE LIMITING VÀ HIỆU NĂNG
+Load embedding của sinh viên thuộc lớp vào memory/cache khi session bắt đầu hoặc cache theo class.
+Không tải toàn bộ database cho từng frame.
+Cache phải có invalidation khi FaceData thay đổi.
+Dùng lock/idempotency để tránh hai request cùng lúc tạo duplicate attendance.
+Không xử lý AI nặng trong event loop nếu thư viện/model blocking; tách worker/process/service khi cần.
+Export report lớn nên chạy background job và trả taskId.
+WebSocket nên sampling frame thay vì gửi mọi frame camera.
+13.1 Quy mô
+Quy mô
+Chiến lược
+Lớp nhỏ
+NumPy + memory cache có thể đủ.
+Nhiều lớp/embedding
+Cache theo class/session.
+Nhiều embedding lớn
+FAISS hoặc vector database phù hợp.
+AI nặng
+Tách AI service/worker và cân nhắc GPU.
+14. XỬ LÝ LỖI VÀ TRẠNG THÁI
+HTTP
+Ý nghĩa
+400
+Request/business input không hợp lệ
+401
+Chưa xác thực hoặc token không hợp lệ
+403
+Không có quyền
+404
+Không tìm thấy resource
+409
+Conflict/duplicate
+422
+Validation error
+429
+Rate limit
+500
+Internal server error
+503
+Service/AI/database tạm thời unavailable
+Không trả stack trace cho client production. Log chi tiết ở server kèm requestId.
+15. LOGGING, AUDIT VÀ MONITORING
+Structured logging dạng JSON nếu có thể.
+Mỗi request có requestId/correlationId.
+Audit các hành động: login failure/success, đổi role, khóa user, register face, approve/reject attendance, approve/reject complaint, export report.
+Health endpoints: /health và /ready.
+Theo dõi latency API, WebSocket connection count, AI processing time, error rate, DB connection pool, Redis availability.
+Không log raw image, password, access token hay embedding.
+16. TESTING VÀ ĐÁNH GIÁ AI
+16.1 Backend tests
+Unit test service/repository.
+API test login, RBAC, validation, CRUD.
+Integration test transaction và foreign key.
+Test duplicate attendance.
+Test rate limit.
+Test complaint workflow.
+16.2 AI evaluation
+Chỉ số
+Ý nghĩa
+Precision
+Tỷ lệ nhận diện dương tính đúng.
+Recall
+Khả năng tìm đúng người.
+F1
+Cân bằng precision/recall.
+False Acceptance Rate
+Nhận nhầm người thành người khác.
+False Rejection Rate
+Không nhận ra đúng người.
+Latency
+Thời gian xử lý mỗi frame/request.
+Cần kiểm thử trong điều kiện ánh sáng, góc mặt, khẩu trang/kính nếu phạm vi cho phép, khoảng cách camera và nhiều người cùng khung hình.
+16.3 Security tests
+Brute-force login.
+Expired/revoked token.
+Privilege escalation.
+IDOR: truy cập class/session/user không thuộc quyền.
+Upload file không hợp lệ.
+WebSocket unauthorized connection.
+17. DEPLOYMENT VÀ VẬN HÀNH
+Môi trường đề xuất:
+Môi trường
+Thành phần
+Development
+Frontend + FastAPI + MySQL + Redis local/Docker
+Staging
+Docker Compose, test data, logging
+Production
+Nginx/HTTPS + Backend + AI + MySQL + Redis + Object Storage + monitoring
+17.1 Docker Compose logic
+frontend
+backend
+mysql
+redis
+ai-service (nếu tách)
+worker (nếu có)
+nginx (production/reverse proxy)
+17.2 Backup
+Backup MySQL định kỳ.
+Kiểm tra khả năng restore, không chỉ tạo backup.
+Object storage có versioning/backup nếu chứa ảnh minh chứng quan trọng.
+Không lưu backup secrets trong repository.
+18. CẤU TRÚC SOURCE CODE ĐỀ XUẤT
+backend/
+├── app/
+│   ├── main.py
+│   ├── core/            # config, security, rate_limit
+│   ├── models/          # SQLAlchemy models
+│   ├── schemas/         # Pydantic schemas
+│   ├── routers/         # REST endpoints
+│   ├── services/        # business logic + AI orchestration
+│   ├── repositories/    # data access
+│   ├── websocket/       # realtime handlers
+│   └── utils/
+├── alembic/
+├── tests/
+├── uploads/             # dev only
+├── Dockerfile
+└── requirements.txt
+frontend/
+├── src/
+│   ├── pages/
+│   ├── components/
+│   ├── services/
+│   ├── hooks/
+│   ├── types/
+│   └── websocket/
+└── Dockerfile
+19. QUY TRÌNH PHÁT TRIỂN
+Thiết kế database và migration.
+Xây Authentication + RBAC + rate limit.
+Xây User/Class/ClassStudent APIs.
+Xây Face registration và quality validation.
+Xây AI recognition service.
+Xây Attendance Session và duplicate protection.
+Xây WebSocket realtime.
+Xây review và complaint workflow.
+Xây report export.
+Thêm audit/logging/monitoring.
+Thêm test và security test.
+Dockerize và deploy staging.
+Đánh giá AI bằng dữ liệu thực tế và hiệu chỉnh threshold.
+20. CHECKLIST HOÀN THIỆN PROJECT
+☐ Database schema + foreign keys + indexes
+☐ Alembic migration
+☐ Login + JWT access/refresh
+☐ Password hashing
+☐ Logout/revoke refresh token
+☐ RBAC Student/Teacher/Admin
+☐ Rate limiting login
+☐ User management
+☐ Class management
+☐ Student enrollment
+☐ Face registration
+☐ Face quality validation
+☐ Face embedding
+☐ Face recognition
+☐ Confidence threshold
+☐ Duplicate attendance protection
+☐ Attendance session
+☐ Late rule
+☐ WebSocket realtime
+☐ AI review queue
+☐ Complaint workflow
+☐ CSV/Excel export
+☐ Private image storage
+☐ Liveness/anti-spoofing (production)
+☐ Audit log
+☐ Structured logging
+☐ Health/readiness checks
+☐ Unit tests
+☐ Integration/API tests
+☐ AI evaluation
+☐ Security tests
+☐ Docker Compose
+☐ Database backup/restore
+☐ Documentation / README / .env.example
+PHỤ LỤC A – TRẠNG THÁI DỮ LIỆU
+Đối tượng
+Các trạng thái
+User
+active / inactive
+Session
+active / closed
+Attendance
+present / late / absent
+Review
+pending / approved / rejected
+Complaint
+pending / approved / rejected
+PHỤ LỤC B – NGUYÊN TẮC THIẾT KẾ
+Backend là nơi thực thi quyền; frontend chỉ là lớp hiển thị.
+AI là nguồn đề xuất kết quả, không phải nguồn chân lý tuyệt đối.
+Thiết kế idempotent cho thao tác điểm danh.
+Không block request bằng tác vụ AI/export nặng khi có thể dùng worker.
+Dữ liệu khuôn mặt phải được bảo vệ như dữ liệu nhạy cảm.
+Threshold phải được đo và hiệu chỉnh bằng dữ liệu thực tế.
+Luôn có đường fallback/review thủ công cho kết quả không chắc chắn.
+GHI CHÚ VỀ NGUỒN VÀ PHẠM VI BỔ SUNG
+Tài liệu này giữ các thành phần cốt lõi của file gốc: ba nhóm người dùng; các chức năng STU_01–STU_04, TEA_01–TEA_06, ADM_01–ADM_02; ngưỡng nhận diện 85% và 60%; các bảng Users, FaceData, Classes, ClassStudents, AttendanceSessions, AttendanceLogs, ConsensusRequests; chống duplicate theo sessionId + studentId và cache vector trong RAM. Các chương kiến trúc, API, JWT/RBAC, WebSocket, rate limiting, liveness, security, testing, deployment, audit và monitoring là phần mở rộng để biến đặc tả chức năng thành tài liệu triển khai project hoàn chỉnh.

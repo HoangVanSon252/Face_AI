@@ -1,0 +1,70 @@
+# ==========================================
+# BIẾN MÔI TRƯỜNG & SECRETS
+# ==========================================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ==========================================
+# BACKEND (PYTHON / FASTAPI)
+# ==========================================
+# Môi trường ảo (Virtual Environments)
+venv/
+env/
+backend/venv/
+
+# Byte-compiled / Optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C libraries
+*.so
+
+# PyTest & Coverage
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+.tox/
+
+# SQLite databases (nếu test cục bộ)
+*.sqlite3
+*.db
+
+# ==========================================
+# FRONTEND (REACT / NODE.JS)
+# ==========================================
+node_modules/
+frontend/node_modules/
+dist/
+build/
+.npm/
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+
+# ==========================================
+# THƯ MỤC UPLOAD/MEDIA
+# ==========================================
+# Không đưa ảnh khuôn mặt test lên Git
+backend/uploads/
+backend/media/
+
+# ==========================================
+# OS & IDE
+# ==========================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+.vscode/
+.idea/
+*.swp
+*.swo
