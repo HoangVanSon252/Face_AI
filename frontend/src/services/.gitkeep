@@ -1,0 +1,2 @@
+# Services directory
+Handles REST API requests, HTTP client configuration (Axios/Fetch), and API endpoint handlers.

@@ -1,0 +1,2 @@
+# Hooks directory
+Custom React hooks (e.g., useAuth, useCamera, useWebSocket, useAttendance).
