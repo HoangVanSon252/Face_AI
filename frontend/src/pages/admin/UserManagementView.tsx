@@ -367,7 +367,7 @@ export function UserManagementView() {
             <label className="block text-xs font-semibold text-slate-700 mb-1">Email liên lạc *</label>
             <input
               type="email"
-              placeholder="VD: son.hv@fpt.edu.vn"
+              placeholder="VD: son.hv@ptit.edu.vn"
               value={formEmail}
               onChange={(e) => setFormEmail(e.target.value)}
               required
