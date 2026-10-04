@@ -10,30 +10,10 @@ interface LoginViewProps {
 }
 
 const DEMO_ACCOUNTS = [
-  { role: 'student' as Role, label: 'Sinh viên', username: 'sv.nguyenvanA', color: 'bg-[#fbe8e2] text-[#c96d58] border-[#f4c5b5]' },
-  { role: 'teacher' as Role, label: 'Giảng viên', username: 'gv.tranthibinh', color: 'bg-[#e0f5f1] text-[#138d81] border-[#b2e0d8]' },
-  { role: 'admin' as Role,   label: 'Quản trị viên', username: 'admin.sys', color: 'bg-[#fff2dc] text-[#cc8b30] border-[#f5d98a]' },
+  { role: 'student' as Role, label: 'Sinh viên (Trần Minh Khoa)', username: 'khoa.tm', color: 'bg-[#fbe8e2] text-[#c96d58] border-[#f4c5b5]' },
+  { role: 'teacher' as Role, label: 'Giảng viên (Nguyễn Thị Lan)', username: 'lan.nt', color: 'bg-[#e0f5f1] text-[#138d81] border-[#b2e0d8]' },
+  { role: 'admin' as Role,   label: 'Quản trị viên (Phạm Đức Long)', username: 'long.pd', color: 'bg-[#fff2dc] text-[#cc8b30] border-[#f5d98a]' },
 ]
-
-// Rate limiting: max 5 attempts per 60s
-const RATE_LIMIT_KEY = 'attendly_login_attempts'
-const MAX_ATTEMPTS = 5
-const LOCK_DURATION_MS = 60_000
-
-interface RateData { count: number; lockedUntil?: number }
-
-function getRateData(): RateData {
-  try {
-    const d = JSON.parse(localStorage.getItem(RATE_LIMIT_KEY) || '{}')
-    return { count: d.count ?? 0, lockedUntil: d.lockedUntil }
-  } catch {
-    return { count: 0 }
-  }
-}
-function setRateData(d: RateData) {
-  localStorage.setItem(RATE_LIMIT_KEY, JSON.stringify(d))
-}
-function resetRateData() { localStorage.removeItem(RATE_LIMIT_KEY) }
 
 export function LoginView({ onLogin, onGoRegister }: LoginViewProps) {
   const [username, setUsername] = useState('')
@@ -43,67 +23,21 @@ export function LoginView({ onLogin, onGoRegister }: LoginViewProps) {
   const [error, setError] = useState('')
   const [selectedRole] = useState<Role | undefined>(undefined)
 
-  const getRemainingLockSeconds = (): number => {
-    const rd = getRateData()
-    if (rd.lockedUntil && Date.now() < rd.lockedUntil) {
-      return Math.ceil((rd.lockedUntil - Date.now()) / 1000)
-    }
-    return 0
-  }
-
-  const [lockSec, setLockSec] = useState(getRemainingLockSeconds)
-
-  // Countdown timer when locked
-  const startCountdown = (secs: number) => {
-    setLockSec(secs)
-    const interval = setInterval(() => {
-      setLockSec((prev) => {
-        if (prev <= 1) { clearInterval(interval); resetRateData(); return 0 }
-        return prev - 1
-      })
-    }, 1000)
-  }
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-
-    if (lockSec > 0) {
-      setError(`Tài khoản tạm khóa. Vui lòng thử lại sau ${lockSec} giây.`)
-      return
-    }
 
     if (!username.trim() || !password.trim()) {
       setError('Vui lòng nhập đầy đủ thông tin đăng nhập.')
       return
     }
 
-    const rd = getRateData()
-    if (rd.lockedUntil && Date.now() < rd.lockedUntil) {
-      const secs = Math.ceil((rd.lockedUntil - Date.now()) / 1000)
-      startCountdown(secs)
-      setError(`Tài khoản tạm khóa do đăng nhập sai quá nhiều lần. Thử lại sau ${secs} giây.`)
-      return
-    }
-
     setLoading(true)
     try {
       const user = await authService.login(username, password, selectedRole)
-      resetRateData()
       onLogin(user)
     } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : 'Đăng nhập thất bại'
-      // Rate limit tracking
-      const count = (rd.count || 0) + 1
-      if (count >= MAX_ATTEMPTS) {
-        const lockedUntil = Date.now() + LOCK_DURATION_MS
-        setRateData({ count, lockedUntil })
-        startCountdown(Math.ceil(LOCK_DURATION_MS / 1000))
-        setError(`Sai mật khẩu ${MAX_ATTEMPTS} lần liên tiếp. Tài khoản bị tạm khóa 60 giây.`)
-      } else {
-        setRateData({ count })
-        setError(`${errMsg} (${count}/${MAX_ATTEMPTS} lần thử)`)
-      }
+      setError(err instanceof Error ? err.message : 'Đăng nhập thất bại')
     } finally {
       setLoading(false)
     }
@@ -114,7 +48,6 @@ export function LoginView({ onLogin, onGoRegister }: LoginViewProps) {
     setError('')
     try {
       const user = await authService.login('', '', role)
-      resetRateData()
       onLogin(user)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Đăng nhập thất bại')
@@ -214,17 +147,10 @@ export function LoginView({ onLogin, onGoRegister }: LoginViewProps) {
               </button>
             </div>
 
-            {/* Lock countdown */}
-            {lockSec > 0 && (
-              <div className="bg-[#fff2dc] border border-[#f5d98a] text-[#886214] rounded-xl px-3.5 py-2.5 text-xs text-center font-medium">
-                ⏳ Tài khoản tạm khóa — thử lại sau <strong>{lockSec}s</strong>
-              </div>
-            )}
-
             {/* Submit */}
             <button
               type="submit"
-              disabled={loading || lockSec > 0}
+              disabled={loading}
               className={cn(
                 'w-full h-11 flex items-center justify-center gap-2 rounded-xl text-sm font-bold transition-all',
                 'bg-[#148f83] text-white shadow-[0_4px_14px_rgba(20,143,131,0.3)]',

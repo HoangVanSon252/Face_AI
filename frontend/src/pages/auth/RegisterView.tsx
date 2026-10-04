@@ -155,7 +155,7 @@ export function RegisterView({ onGoLogin, onRegistered }: RegisterViewProps) {
             <CalendarCheck size={24} className="text-white" />
           </div>
           <h1 className="text-xl font-extrabold text-[#172b35]">Tạo tài khoản mới</h1>
-          <p className="text-xs text-[#6e7d82] mt-1">Hệ thống điểm danh AI · Đại học FPT</p>
+          <p className="text-xs text-[#6e7d82] mt-1">Hệ thống điểm danh AI · Học viện PTIT</p>
         </div>
 
         {/* Card */}
@@ -205,7 +205,7 @@ export function RegisterView({ onGoLogin, onRegistered }: RegisterViewProps) {
                 type="email"
                 value={form.email}
                 onChange={(e) => update('email', e.target.value)}
-                placeholder="nguyenvana@fpt.edu.vn"
+                placeholder="nguyenvana@ptit.edu.vn"
                 className={inputCls(fieldErrors.email)}
               />
             </Field>

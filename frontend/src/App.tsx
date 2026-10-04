@@ -45,13 +45,21 @@ function MainApp() {
   const [mobileMenu, setMobileMenu] = useState(false)
   const [pendingLogs, setPendingLogs] = useState<AttendanceLog[]>([])
 
-  // Fetch pending review logs and classes
+  // Fetch pending review logs, check auth and load classes
   const refreshLogs = async () => {
     const logs = await attendanceService.getLogs()
     setPendingLogs(logs.filter((l) => l.reviewStatus === 'pending'))
   }
 
   useEffect(() => {
+    // Check if backend session is active
+    authService.getMe().then((user) => {
+      if (user) {
+        setCurrentUser(user)
+        setRole(user.role)
+      }
+    })
+
     refreshLogs()
     classService.getClasses().then((cls) => {
       setAvailableClasses(cls)
@@ -68,7 +76,8 @@ function MainApp() {
     showToast(`Đã chuyển sang vai trò ${newRole.toUpperCase()} (${user.fullName})`, 'info')
   }
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await authService.logout()
     setCurrentUser(null)
     setAuthScreen('login')
     showToast('Đã đăng xuất khỏi hệ thống', 'info')
@@ -129,13 +138,22 @@ function MainApp() {
     }
   }
 
+  // Dynamic date & greeting
+  const now = new Date()
+  const dayNames = ['CHỦ NHẬT', 'THỨ HAI', 'THỨ BA', 'THỨ TƯ', 'THỨ NĂM', 'THỨ SÁU', 'THỨ BẢY']
+  const monthNames = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
+  const dateDisplay = `${dayNames[now.getDay()]} · ${String(now.getDate()).padStart(2, '0')} THÁNG ${monthNames[now.getMonth()]}, ${now.getFullYear()}`
+  const hour = now.getHours()
+  const greeting = hour < 12 ? 'buổi sáng' : hour < 18 ? 'buổi chiều' : 'buổi tối'
+  const lastName = currentUser.fullName.split(' ').slice(-1)[0]
+
   const pageTitle =
     activeView === 'Tổng quan'
       ? role === 'student'
-        ? `Chào ${currentUser.fullName.split(' ').slice(-1)[0]}, hôm nay thế nào?`
+        ? `Chào ${lastName}, hôm nay thế nào?`
         : role === 'admin'
         ? 'Tổng quan quản trị hệ thống'
-        : `Chào buổi sáng, cô ${currentUser.fullName.split(' ').slice(-1)[0]}`
+        : `Chào ${greeting}, thầy/cô ${lastName}`
       : activeView
 
   return (
@@ -166,7 +184,7 @@ function MainApp() {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200/60">
             <div>
               <p className="text-[11px] font-bold tracking-wider text-teal-700 uppercase">
-                THỨ TƯ · 11 THÁNG 09, 2026
+                {dateDisplay}
               </p>
               <h1 className="text-2xl font-bold tracking-tight text-slate-900 mt-1">{pageTitle}</h1>
               <p className="text-xs text-slate-500 mt-0.5">

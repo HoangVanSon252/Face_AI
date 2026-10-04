@@ -109,11 +109,11 @@ export function Sidebar({
 
         {/* Workspace indicator */}
         <div className="flex items-center gap-2 px-3.5 py-2.5 mx-3 mt-3 rounded-xl bg-[#f5f8f8] border border-[#e4ebeb]">
-          <div className="w-7 h-7 rounded-lg bg-[#148f83] text-white grid place-items-center text-[10px] font-bold flex-none">
-            FPT
+          <div className="w-7 h-7 rounded-lg bg-[#d92d20] text-white grid place-items-center text-[10px] font-bold flex-none">
+            PTIT
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-bold text-[#172b35] truncate">Đại học FPT</p>
+            <p className="text-xs font-bold text-[#172b35] truncate">Học viện PTIT</p>
             <p className="text-[10px] text-[#8b999d] truncate">Khoa Công nghệ thông tin</p>
           </div>
           <ChevronDown size={13} className="text-[#8b999d] flex-none" />
