@@ -4,13 +4,7 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-# Cài đặt hệ thống cần thiết
-# Tải và setup Redis từ Docker Hub
-RUN curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" > /etc/apt/sources.list.d/redis.list \
-    && apt-get update \
-    && apt-get install -y redis-server
-
+# Cài đặt hệ thống cần thiết (nếu có sau này)
 # Cài đặt thư viện Python
 RUN pip install --no-cache-dir -r requirements.txt
 
