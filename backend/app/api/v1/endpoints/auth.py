@@ -22,7 +22,7 @@ from app.crud import crud_user
 from app.schemas.token import Token
 from app.models.user import UserStatusEnum
 from app.schemas.user import UserResponse
-
+from app.services.audit_service import write_audit_log
 router = APIRouter()
 
 
@@ -45,19 +45,48 @@ def login_access_token(
     """
     # Xác thực thông tin đăng nhập
     user = crud_user.get_user_by_username(db, username=form_data.username)
-    if not user or not security.verify_password(form_data.password, user.password_hash):
+    if not user or not security.verify_password(form_data.password, user.password_hash if user else ""):
+        write_audit_log(
+            db,
+            action="Failed_Login_Attempt",
+            actor_user_id=user.id if user else None,
+            entity_type="User",
+            entity_id=user.id if user else None,
+            request=request,
+            details={
+                "endpoint": "/api/v1/auth/login",
+                "username": form_data.username,
+            },
+            commit=True
+        )
+
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
         )
     if user.status != UserStatusEnum.ACTIVE:
+        write_audit_log(
+            db,
+            action="LOGIN_BLOCKED_INACTIVE_USER",
+            actor_user_id=user.id,
+            entity_type="USER",
+            entity_id=user.id,
+            request=request,
+            details={
+                "endpoint": "/api/v1/auth/login",
+                "username": user.username,
+                "status": user.status.value,
+            },
+            commit=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Inactive user",
         )
 
     # Tạo Access Token
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token_expires = timedelta(
+        minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = security.create_access_token(
         user.id, expires_delta=access_token_expires
     )
@@ -69,11 +98,26 @@ def login_access_token(
         user_id=user.id,
         token=raw_refresh_token,
         expires_days=settings.REFRESH_TOKEN_EXPIRE_DAYS,
+        commit=False,
     )
 
+    write_audit_log(
+        db,
+        action="User_Login",
+        actor_user_id=user.id,
+        entity_type="User",
+        entity_id=user.id,
+        request=request,
+        details={
+            "endpoint": "/api/v1/auth/login",
+            "username": user.username,
+        },
+        commit=False
+    )
     # Set HttpOnly Cookie cho Refresh Token + CSRF Cookie
     set_auth_cookies(response, raw_refresh_token)
 
+    db.commit()  # Commit transaction để lưu refresh token vào DB
     # Chỉ trả access_token trong body – refresh_token KHÔNG trong body nữa
     return {
         "access_token": access_token,
@@ -91,7 +135,8 @@ def refresh_access_token(
     request: Request,
     response: Response,
     db: Session = Depends(dependencies.get_db),
-    refresh_token: str | None = Cookie(default=None),          # Đọc từ HttpOnly Cookie
+    refresh_token: str | None = Cookie(
+        default=None),          # Đọc từ HttpOnly Cookie
     _csrf: None = Depends(verify_csrf_token),                   # CSRF check
 ) -> Any:
     """
@@ -111,7 +156,22 @@ def refresh_access_token(
     if token_obj.revoked_at is not None:
         # Token bị dùng lại sau khi đã thu hồi → có thể bị đánh cắp
         # Thu hồi toàn bộ session của user (giả định bị compromise)
-        crud_user.revoke_all_user_tokens(db, user_id=token_obj.user_id)
+        crud_user.revoke_all_user_tokens(
+            db,
+            user_id=token_obj.user_id,
+            commit=False,
+        )
+        write_audit_log(
+            db,
+            action="REFRESH_TOKEN_REUSE_DETECTED",
+            actor_user_id=token_obj.user_id,
+            entity_type="USER",
+            entity_id=token_obj.user_id,
+            request=request,
+            details={"endpoint": "/api/v1/auth/refresh"},
+            commit=False,
+        )
+        db.commit()
         raise HTTPException(
             status_code=401,
             detail="Refresh token reuse detected. All sessions revoked.",
@@ -120,10 +180,11 @@ def refresh_access_token(
         raise HTTPException(status_code=401, detail="Refresh token expired")
 
     # Token Rotation: Thu hồi token cũ
-    crud_user.revoke_refresh_token(db, token_obj=token_obj)
+    crud_user.revoke_refresh_token(db, token_obj=token_obj, commit=False)
 
     # Cấp Access Token mới
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token_expires = timedelta(
+        minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     new_access_token = security.create_access_token(
         token_obj.user_id, expires_delta=access_token_expires
     )
@@ -135,8 +196,21 @@ def refresh_access_token(
         user_id=token_obj.user_id,
         token=new_raw_refresh,
         expires_days=settings.REFRESH_TOKEN_EXPIRE_DAYS,
+        commit=False,
     )
     set_auth_cookies(response, new_raw_refresh)
+
+    write_audit_log(
+        db,
+        action="TOKEN_REFRESH",
+        actor_user_id=token_obj.user_id,
+        entity_type="USER",
+        entity_id=token_obj.user_id,
+        request=request,
+        details={"endpoint": "/api/v1/auth/refresh"},
+        commit=False,
+    )
+    db.commit()
 
     return {
         "access_token": new_access_token,
@@ -150,18 +224,44 @@ def refresh_access_token(
 # ─────────────────────────────────────────────
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(
+    request: Request,
     response: Response,
     db: Session = Depends(dependencies.get_db),
     refresh_token: str | None = Cookie(default=None),
+    _csrf: None = Depends(verify_csrf_token),
 ) -> None:
     """Logout – thu hồi refresh token và xoá cookie."""
     if refresh_token:
         token_obj = crud_user.get_refresh_token_db(db, refresh_token)
         if token_obj and token_obj.revoked_at is None:
-            crud_user.revoke_refresh_token(db, token_obj=token_obj)
+            crud_user.revoke_refresh_token(db, token_obj=token_obj, commit=False)
+            write_audit_log(
+                db,
+                action="LOGOUT",
+                actor_user_id=token_obj.user_id,
+                entity_type="USER",
+                entity_id=token_obj.user_id,
+                request=request,
+                details={"endpoint": "/api/v1/auth/logout"},
+                commit=False,
+            )
+            db.commit()
     clear_auth_cookies(response)
 
+
 @router.get("/me", response_model=UserResponse)
-def get_me(current_user = Depends(dependencies.get_current_active_user)) -> UserResponse:
+def get_me(request: Request, db: Session = Depends(dependencies.get_db), current_user=Depends(dependencies.get_current_active_user)) -> UserResponse:
     """Return the authenticated user's profile."""
+    write_audit_log(
+        db,
+        action="View_Current_User_Profile",
+        actor_user_id=current_user.id,
+        entity_type="User",
+        entity_id=current_user.id,
+        request=request,
+        details={
+            "endpoint": "/api/v1/auth/me",
+        },
+        commit=True
+    )
     return current_user

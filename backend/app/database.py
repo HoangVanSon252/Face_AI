@@ -7,8 +7,10 @@ from app.core.config import settings
 engine = create_engine(
     settings.SQLALCHEMY_DATABASE_URI,
     pool_pre_ping=True, # Tự động ping DB xem kết nối còn sống không
-    pool_size=10,
-    max_overflow=20,
+    pool_size=settings.DB_POOL_SIZE,
+    max_overflow=settings.DB_MAX_OVERFLOW,
+    pool_timeout=settings.DB_POOL_TIMEOUT,
+    connect_args={"connect_timeout": settings.DB_CONNECT_TIMEOUT},
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

@@ -67,6 +67,6 @@ def setup_exception_handler(app):
                 "code": "INTERNAL_SERVER_ERROR",
                 "message": "Đã có lỗi xảy ra",
                 "data": None,
-                "error": str(exc) # Ghi nhận lỗi chi tiết ở server, có thể giấu đi ở production
+                "error": None,
             }
         )
