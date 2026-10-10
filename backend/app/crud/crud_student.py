@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session, joinedload
 from app.models.user import User, Student, UserStatusEnum, RoleEnum
+from app.models.course import ClassSection, Enrollment, EnrollmentStatusEnum
 from app.schemas.user import UserCreate, StudentProfileCreate
 from app.core.security import get_password_hash
 from app.core.exceptions import APIException
@@ -10,6 +11,28 @@ def get_all_students(db: Session, skip: int = 0, limit: int = 50):
     return (
         db.query(Student)
         .options(joinedload(Student.user))
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
+
+def get_students_for_lecturer(
+    db: Session,
+    lecturer_id: int,
+    skip: int = 0,
+    limit: int = 50,
+):
+    return (
+        db.query(Student)
+        .join(Enrollment, Enrollment.student_id == Student.user_id)
+        .join(ClassSection, ClassSection.id == Enrollment.section_id)
+        .options(joinedload(Student.user))
+        .filter(
+            ClassSection.lecturer_id == lecturer_id,
+            Enrollment.status == EnrollmentStatusEnum.ENROLLED,
+        )
+        .distinct()
         .offset(skip)
         .limit(limit)
         .all()

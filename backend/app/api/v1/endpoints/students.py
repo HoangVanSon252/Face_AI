@@ -13,12 +13,29 @@ require_staff = dependencies.require_role([RoleEnum.ADMIN.value, RoleEnum.LECTUR
 
 
 @router.get('/', response_model=list[StudentProfileResponse])
-def list_students(skip: int = 0, limit: int = 50, db: Session = Depends(dependencies.get_db), _: Any = Depends(require_staff)):
-    return crud_student.get_all_students(db, skip=skip, limit=min(limit, 100))
+def list_students(
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(dependencies.get_db),
+    current_user=Depends(require_staff),
+):
+    if current_user.role == RoleEnum.ADMIN:
+        return crud_student.get_all_students(db, skip=skip, limit=min(limit, 100))
+    return crud_student.get_students_for_lecturer(
+        db,
+        lecturer_id=current_user.id,
+        skip=skip,
+        limit=min(limit, 100),
+    )
 
 
 @router.get('/{student_id}', response_model=StudentProfileResponse)
-def get_student(student_id: int, db: Session = Depends(dependencies.get_db), _: Any = Depends(require_staff)):
+def get_student(
+    student_id: int,
+    db: Session = Depends(dependencies.get_db),
+    current_user=Depends(dependencies.get_current_active_user),
+):
+    dependencies.require_student_access(db, student_id, current_user)
     student = crud_student.get_student_by_id(db, student_id)
     if not student:
         raise HTTPException(status_code=404, detail='Student not found')

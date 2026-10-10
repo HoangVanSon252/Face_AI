@@ -57,9 +57,10 @@ def create_course(
 def list_sections(
     semester_id: int,
     db: Session = Depends(dependencies.get_db),
-    _: Any = Depends(require_staff),
+    current_user=Depends(require_staff),
 ):
-    return crud_course.get_sections_by_semester(db, semester_id)
+    lecturer_id = current_user.id if current_user.role == RoleEnum.LECTURER else None
+    return crud_course.get_sections_by_semester(db, semester_id, lecturer_id=lecturer_id)
 
 @router.post("/sections", response_model=ClassSectionResponse, status_code=201)
 def create_section(
@@ -75,8 +76,9 @@ def create_section(
 def list_enrollments(
     section_id: int,
     db: Session = Depends(dependencies.get_db),
-    _: Any = Depends(require_staff),
+    current_user=Depends(require_staff),
 ):
+    dependencies.require_section_access(db, section_id, current_user)
     return crud_course.get_enrollments_by_section(db, section_id)
 
 @router.post("/sections/{section_id}/enrollments", response_model=EnrollmentResponse, status_code=201)

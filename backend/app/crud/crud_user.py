@@ -47,7 +47,14 @@ def create_user(db: Session, user: UserCreate) -> User:
             message="Lỗi khi tạo người dùng."
         )
 
-def create_refresh_token_db(db: Session, user_id: int, token: str, expires_days: int) -> RefreshToken:
+def create_refresh_token_db(
+    db: Session,
+    user_id: int,
+    token: str,
+    expires_days: int,
+    *,
+    commit: bool = True,
+) -> RefreshToken:
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     expires_at = datetime.utcnow() + timedelta(days=expires_days)
     db_token = RefreshToken(
@@ -56,23 +63,37 @@ def create_refresh_token_db(db: Session, user_id: int, token: str, expires_days:
         expires_at=expires_at
     )
     db.add(db_token)
-    db.commit()
-    db.refresh(db_token)
+    db.flush()
+    if commit:
+        db.commit()
+        db.refresh(db_token)
     return db_token
 
 def get_refresh_token_db(db: Session, token: str) -> RefreshToken | None:
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     return db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
 
-def revoke_refresh_token(db: Session, token_obj: RefreshToken) -> None:
+def revoke_refresh_token(
+    db: Session,
+    token_obj: RefreshToken,
+    *,
+    commit: bool = True,
+) -> None:
     """Thu hồi 1 refresh token cụ thể (Token Rotation)."""
     token_obj.revoked_at = datetime.utcnow()
-    db.commit()
+    if commit:
+        db.commit()
 
-def revoke_all_user_tokens(db: Session, user_id: int) -> None:
+def revoke_all_user_tokens(
+    db: Session,
+    user_id: int,
+    *,
+    commit: bool = True,
+) -> None:
     """Thu hồi toàn bộ refresh token của user (khi phát hiện token reuse / compromise)."""
     db.query(RefreshToken).filter(
         RefreshToken.user_id == user_id,
         RefreshToken.revoked_at.is_(None),
     ).update({"revoked_at": datetime.utcnow()})
-    db.commit()
+    if commit:
+        db.commit()
