@@ -4,7 +4,7 @@
  */
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || ''
-const TOKEN_STORAGE_KEY = 'attendly_access_token'
+let accessToken: string | null = null
 
 export class ApiError extends Error {
   status: number
@@ -21,27 +21,15 @@ export class ApiError extends Error {
 }
 
 export function getStoredToken(): string | null {
-  try {
-    return localStorage.getItem(TOKEN_STORAGE_KEY)
-  } catch {
-    return null
-  }
+  return accessToken
 }
 
 export function setStoredToken(token: string): void {
-  try {
-    localStorage.setItem(TOKEN_STORAGE_KEY, token)
-  } catch (e) {
-    console.error('Failed to store access token:', e)
-  }
+  accessToken = token
 }
 
 export function removeStoredToken(): void {
-  try {
-    localStorage.removeItem(TOKEN_STORAGE_KEY)
-  } catch (e) {
-    console.error('Failed to remove access token:', e)
-  }
+  accessToken = null
 }
 
 export function getCookie(name: string): string | null {

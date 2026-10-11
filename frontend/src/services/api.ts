@@ -12,7 +12,6 @@ import {
   httpClient,
   setStoredToken,
   removeStoredToken,
-  getStoredToken,
 } from './httpClient'
 import {
   INITIAL_USERS,
@@ -132,11 +131,12 @@ interface BackendEnrollmentItem {
 
 // Transform backend user response to frontend User model
 function mapBackendUserToFrontend(u: BackendUserResponse): User {
-  const role: Role = u.role === 'lecturer' ? 'teacher' : (u.role as Role)
+  const backendRole = u.role.toLowerCase()
+  const role: Role = backendRole === 'lecturer' ? 'teacher' : (backendRole as Role)
   const userId =
     u.student_profile?.student_code ||
     u.lecturer_profile?.lecturer_code ||
-    (u.role === 'admin' ? `AD${u.id.toString().padStart(4, '0')}` : `USR${u.id.toString().padStart(4, '0')}`)
+    (backendRole === 'admin' ? `AD${u.id.toString().padStart(4, '0')}` : `USR${u.id.toString().padStart(4, '0')}`)
   const department = u.student_profile?.major || u.lecturer_profile?.department || 'Khoa Công nghệ thông tin'
 
   const initials = u.full_name
@@ -155,7 +155,7 @@ function mapBackendUserToFrontend(u: BackendUserResponse): User {
     fullName: u.full_name,
     email: u.email,
     role,
-    isActive: u.status === 'active',
+    isActive: u.status.toLowerCase() === 'active',
     department,
     hasFaceRegistered: false,
     avatar: initials || 'ND',
@@ -268,15 +268,10 @@ export const authService = {
   },
 
   getMe: async (): Promise<User | null> => {
-    const token = getStoredToken()
-    if (!token) return null
     try {
       const backendUser = await httpClient.get<BackendUserResponse>('/api/v1/auth/me')
       if (backendUser && backendUser.id) {
         const user = mapBackendUserToFrontend(backendUser)
-        // Update user in cache
-        usersCache = [user, ...usersCache.filter((u) => u.id !== user.id)]
-        setStored('users', usersCache)
         return user
       }
       return null
@@ -361,6 +356,9 @@ export const authService = {
   },
 
   register: async (data: RegisterFormData): Promise<User> => {
+    if (data.role !== 'student') {
+      throw new Error('Lecturer accounts must be created by an administrator.')
+    }
     // Try Backend API registration first
     try {
       const isStudent = data.role === 'student'
@@ -376,7 +374,7 @@ export const authService = {
             administrative_class: 'K18',
           },
         }
-        const res = await httpClient.post<BackendStudentItem>('/api/v1/students/', payload, { skipAuth: true })
+        const res = await httpClient.post<BackendStudentItem>('/api/v1/auth/register', payload, { skipAuth: true })
         if (res && res.student_code) {
           const newUser = mapBackendStudentToFrontend(res)
           usersCache = [newUser, ...usersCache.filter((u) => u.userId !== newUser.userId)]
@@ -420,6 +418,7 @@ export const authService = {
         throw new Error(apiError.message || 'Mã tài khoản hoặc email đã tồn tại!')
       }
       console.warn('Backend register error or offline, fallback to local storage:', apiError.message)
+      throw new Error(apiError.message || 'Registration failed.')
     }
 
     // Local fallback

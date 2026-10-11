@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import attendance, audit, auth, reports, sessions, students, lecturers, courses, users, ws
+from app.api.v1.endpoints import attendance, audit, auth, reports, sessions, students, lecturers, courses, users, ws, project_tasks
 
 api_router = APIRouter()
 
@@ -15,4 +15,5 @@ api_router.include_router(sessions.router, tags=["sessions"])
 api_router.include_router(attendance.router, tags=["attendance"])
 api_router.include_router(reports.router, tags=["reports"])
 api_router.include_router(audit.router, tags=["audit"])
+api_router.include_router(project_tasks.router, tags=["project-tasks"])
 api_router.include_router(ws.router, tags=["websocket"])

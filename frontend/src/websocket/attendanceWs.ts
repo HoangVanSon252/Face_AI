@@ -1,4 +1,5 @@
 import type { AttendanceLog } from '../types'
+import { getStoredToken } from '../services/httpClient'
 
 export type WsEventType =
   | 'attendance_detected'
@@ -18,18 +19,28 @@ export type WsListener = (msg: WsMessage) => void
 export class AttendanceWebSocketClient {
   private sessionId: string
   private listeners: Set<WsListener> = new Set()
-  private simulationInterval: any = null
   private isConnected: boolean = false
 
   constructor(sessionId: string) {
     this.sessionId = sessionId
   }
 
-  public connect(useRealWs: boolean = false, wsUrl?: string) {
+  public connect(useRealWs: boolean = true, wsUrl?: string) {
     this.isConnected = true
-    const targetUrl = wsUrl || `ws://localhost:8000/api/v1/ws/sessions/${this.sessionId}`
+    const token = getStoredToken()
+    if (!token) {
+      this.isConnected = false
+      this.broadcast({
+        type: 'error',
+        payload: { message: 'Authentication is required for realtime updates.' },
+        timestamp: new Date().toISOString(),
+      })
+      return
+    }
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+    const targetUrl = wsUrl || `${protocol}://${window.location.host}/api/v1/ws/sessions/${this.sessionId}?token=${encodeURIComponent(token || '')}`
 
-    if (useRealWs && typeof window !== 'undefined' && 'WebSocket' in window) {
+    if (useRealWs && token && typeof window !== 'undefined' && 'WebSocket' in window) {
       try {
         const ws = new WebSocket(targetUrl)
         ws.onopen = () => {
@@ -42,13 +53,21 @@ export class AttendanceWebSocketClient {
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data)
-            this.broadcast(data)
+            this.broadcast({
+              type: data.event || data.type,
+              payload: data.payload,
+              timestamp: data.timestamp || new Date().toISOString(),
+            })
           } catch (err) {
             console.error('WS parse error:', err)
           }
         }
         ws.onerror = () => {
-          this.startSimulation()
+          this.broadcast({
+            type: 'error',
+            payload: { message: 'Realtime connection failed.' },
+            timestamp: new Date().toISOString(),
+          })
         }
         ws.onclose = () => {
           this.isConnected = false
@@ -59,8 +78,11 @@ export class AttendanceWebSocketClient {
       }
     }
 
-    // Fallback simulated pipeline for realistic interactive demo
-    this.startSimulation()
+    this.broadcast({
+      type: 'error',
+      payload: { message: 'Realtime updates are unavailable.' },
+      timestamp: new Date().toISOString(),
+    })
   }
 
   public subscribe(listener: WsListener): () => void {
@@ -97,23 +119,11 @@ export class AttendanceWebSocketClient {
     })
   }
 
-  private startSimulation() {
-    this.broadcast({
-      type: 'session_status',
-      payload: { status: 'active', sessionId: this.sessionId },
-      timestamp: new Date().toLocaleTimeString(),
-    })
-  }
-
   private broadcast(msg: WsMessage) {
     this.listeners.forEach((fn) => fn(msg))
   }
 
   public disconnect() {
     this.isConnected = false
-    if (this.simulationInterval) {
-      clearInterval(this.simulationInterval)
-      this.simulationInterval = null
-    }
   }
 }

@@ -37,6 +37,7 @@ const NAV_ITEMS_BY_ROLE: Record<Role, NavItem[]> = {
     { label: 'Báo cáo', icon: FileBarChart },
   ],
   admin: [
+    { label: 'Project management', icon: Settings },
     { label: 'Tổng quan', icon: LayoutDashboard },
     { label: 'Người dùng', icon: Users },
     { label: 'Báo cáo', icon: FileBarChart },
