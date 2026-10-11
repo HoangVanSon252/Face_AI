@@ -32,11 +32,16 @@ export function AttendanceHistoryView({ role, currentUser }: AttendanceHistoryVi
 
   useEffect(() => {
     const fetchLogs = async () => {
-      const all = await attendanceService.getLogs()
-      if (isStudent) {
-        setLogs(all.filter((l) => l.studentId === currentUser.userId))
-      } else {
-        setLogs(all)
+      try {
+        if (isStudent) {
+          const studentLogs = await attendanceService.getStudentLogs(currentUser.userId)
+          setLogs(studentLogs)
+        } else {
+          const all = await attendanceService.getLogs()
+          setLogs(all)
+        }
+      } catch (err) {
+        console.error('Lỗi khi tải lịch sử điểm danh:', err)
       }
     }
     fetchLogs()
@@ -68,7 +73,7 @@ export function AttendanceHistoryView({ role, currentUser }: AttendanceHistoryVi
   const presentCount = logs.filter((l) => l.status === 'present').length
   const lateCount = logs.filter((l) => l.status === 'late').length
   const absentCount = logs.filter((l) => l.status === 'absent').length
-  const totalCount = logs.length || (isStudent ? 28 : 86)
+  const totalCount = logs.length
 
   return (
     <div className="space-y-6">
@@ -104,7 +109,7 @@ export function AttendanceHistoryView({ role, currentUser }: AttendanceHistoryVi
             <UserCheck size={14} /> Có mặt
           </div>
           <div className="text-2xl font-black text-emerald-600 mt-1">
-            {isStudent ? presentCount || 27 : 1176}
+            {presentCount}
           </div>
         </div>
         <div className="bg-white p-4 rounded-xl border border-slate-200/80 shadow-xs">
@@ -112,7 +117,7 @@ export function AttendanceHistoryView({ role, currentUser }: AttendanceHistoryVi
             <Clock size={14} /> Đi trễ
           </div>
           <div className="text-2xl font-black text-amber-600 mt-1">
-            {isStudent ? lateCount || 1 : 18}
+            {lateCount}
           </div>
         </div>
         <div className="bg-white p-4 rounded-xl border border-slate-200/80 shadow-xs">
@@ -120,7 +125,7 @@ export function AttendanceHistoryView({ role, currentUser }: AttendanceHistoryVi
             <XCircle size={14} /> Vắng mặt
           </div>
           <div className="text-2xl font-black text-rose-600 mt-1">
-            {isStudent ? absentCount || 1 : 42}
+            {absentCount}
           </div>
         </div>
       </div>

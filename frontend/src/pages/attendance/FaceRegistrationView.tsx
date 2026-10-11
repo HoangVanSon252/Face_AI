@@ -37,7 +37,7 @@ export function FaceRegistrationView({
   const isStudent = role === 'student'
   const { showToast } = useToast()
 
-  const [registered, setRegistered] = useState(currentUser.hasFaceRegistered ?? true)
+  const [registered, setRegistered] = useState(Boolean(currentUser.hasFaceRegistered))
   const [samples, setSamples] = useState<string[]>([])
   const [scanning, setScanning] = useState(false)
   const [currentStepIndex, setCurrentStepIndex] = useState(0)

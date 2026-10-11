@@ -7,8 +7,8 @@ import {
   FileText,
   AlertCircle,
 } from 'lucide-react'
-import type { ComplaintRequest, Role, User } from '../../types'
-import { complaintService, attendanceService } from '../../services/api'
+import type { ComplaintRequest, Role, User, AttendanceLog, ClassItem, AttendanceSession } from '../../types'
+import { complaintService, attendanceService, classService, sessionService } from '../../services/api'
 import { Modal } from '../../components/common/Modal'
 import { useToast } from '../../components/common/Toast'
 import { cn } from '../../lib/utils'
@@ -49,40 +49,35 @@ export function ComplaintView({ role, currentUser }: ComplaintViewProps) {
       const list = await complaintService.getStudentComplaints(currentUser.userId)
       setComplaints(list)
 
-      // STU_04: Load valid attended/assigned sessions for this student
-      const allLogs = await attendanceService.getLogs()
-      const studentLogs = allLogs.filter((l) => l.studentId === currentUser.userId)
-      const formattedSessions: StudentSessionOption[] = studentLogs.map((l) => ({
-        sessionId: l.sessionId,
-        className:
-          l.classId === 'IT308'
-            ? 'Lập trình Web nâng cao'
-            : l.classId === 'IT204'
-            ? 'Cơ sở dữ liệu nâng cao'
-            : 'Kỹ năng nghề nghiệp',
-        classId: l.classId,
-        status: l.status,
-        checkInTime: l.checkInTime,
-      }))
+      // STU_04: Load valid attended/assigned sessions for this student from DB
+      const [studentLogs, classesList, sessionsList] = await Promise.all([
+        attendanceService.getStudentLogs(currentUser.userId).catch(() => []),
+        classService.getClasses().catch(() => []),
+        sessionService.getSessions().catch(() => []),
+      ])
 
-      // Fallback default mock sessions if logs are empty
-      if (formattedSessions.length === 0) {
-        formattedSessions.push(
-          {
-            sessionId: 'SES-IT308-0911',
-            className: 'Lập trình Web nâng cao',
-            classId: 'IT308',
-            status: 'present',
-            checkInTime: '08:02:15',
-          },
-          {
-            sessionId: 'SES-IT204-0909',
-            className: 'Cơ sở dữ liệu nâng cao',
-            classId: 'IT204',
+      const formattedSessions: StudentSessionOption[] = (studentLogs as AttendanceLog[]).map((l: AttendanceLog) => {
+        const matchedClass = (classesList as ClassItem[]).find((c: ClassItem) => c.classId === l.classId)
+        return {
+          sessionId: l.sessionId,
+          className: matchedClass?.className || l.classId,
+          classId: l.classId,
+          status: l.status,
+          checkInTime: l.checkInTime,
+        }
+      })
+
+      // If student hasn't logged attendance yet, show available sessions from DB
+      if (formattedSessions.length === 0 && sessionsList.length > 0) {
+        (sessionsList as AttendanceSession[]).slice(0, 5).forEach((s: AttendanceSession) => {
+          formattedSessions.push({
+            sessionId: s.sessionId,
+            className: s.className,
+            classId: s.classId,
             status: 'absent',
-            checkInTime: 'Chưa ghi nhận',
-          }
-        )
+            checkInTime: 'Chưa điểm danh',
+          })
+        })
       }
 
       setValidSessions(formattedSessions)

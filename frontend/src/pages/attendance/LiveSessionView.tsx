@@ -64,7 +64,11 @@ export function LiveSessionView({ session, onCloseSession }: LiveSessionViewProp
       ])
 
       const foundClass = classes.find((c) => c.classId === targetClassId) || classes[0]
-      const studentIds = foundClass?.studentIds || ['SV20240128', 'SV20240129', 'SV20240204', 'SV20240312', 'SV20240405']
+      const realStudentUsers = users.filter((u) => u.role === 'student')
+      const studentIds =
+        foundClass?.studentIds && foundClass.studentIds.length > 0
+          ? foundClass.studentIds
+          : realStudentUsers.slice(0, 5).map((u) => u.userId)
 
       const classRoster: RosterStudent[] = studentIds.map((sid) => {
         const u = users.find((user) => user.userId === sid)
@@ -150,7 +154,11 @@ export function LiveSessionView({ session, onCloseSession }: LiveSessionViewProp
 
   // Simulator Triggers
   const simulateAutoApprove = () => {
-    const student = roster.find((s) => !s.present) || roster[0] || { name: 'Vũ Hoàng Nam', code: 'SV20230104' }
+    const student = roster.find((s) => !s.present) || roster[0]
+    if (!student) {
+      showToast('Chưa có sinh viên nào trong danh sách lớp!', 'info')
+      return
+    }
     const log = attendanceService.addRealtimeRecognition({
       sessionId: activeSessionId,
       classId: targetClassId,
@@ -170,7 +178,11 @@ export function LiveSessionView({ session, onCloseSession }: LiveSessionViewProp
   }
 
   const simulateReviewQueue = () => {
-    const student = roster.find((s) => !s.present) || roster[roster.length - 1] || { name: 'Phạm Gia Bảo', code: 'SV20240405' }
+    const student = roster.find((s) => !s.present) || roster[roster.length - 1]
+    if (!student) {
+      showToast('Chưa có sinh viên nào trong danh sách lớp!', 'info')
+      return
+    }
     const log = attendanceService.addRealtimeRecognition({
       sessionId: activeSessionId,
       classId: targetClassId,
@@ -189,14 +201,16 @@ export function LiveSessionView({ session, onCloseSession }: LiveSessionViewProp
 
   const simulateDuplicate = () => {
     const presentStu = roster.find((s) => s.present) || roster[0]
-    const name = presentStu ? presentStu.name : 'SV20240128'
-    const code = presentStu ? presentStu.code : 'SV20240128'
-    showToast(`[FR-10] Chống trùng lặp: Sinh viên ${name} (${code}) đã điểm danh, bỏ qua lượt quét lặp!`, 'info')
+    if (!presentStu) {
+      showToast('Chưa có sinh viên nào trong danh sách lớp!', 'info')
+      return
+    }
+    showToast(`[FR-10] Chống trùng lặp: Sinh viên ${presentStu.name} (${presentStu.code}) đã điểm danh, bỏ qua lượt quét lặp!`, 'info')
   }
 
   const presentCount = roster.filter((r) => r.present).length
   const totalCount = roster.length
-  const percent = Math.round((presentCount / totalCount) * 100)
+  const percent = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0
 
   return (
     <div className="space-y-6">
