@@ -120,3 +120,20 @@ def cancel_session(
     db.commit()
     db.refresh(session)
     return session
+
+
+@router.get("/sessions", response_model=list[AttendanceSessionResponse])
+def list_all_accessible_sessions(
+    db: Session = Depends(dependencies.get_db),
+    current_user=Depends(dependencies.get_current_active_user),
+):
+    from app.models.course import ClassSection, Enrollment, EnrollmentStatusEnum
+    query = db.query(crud_attendance.AttendanceSession)
+    if current_user.role == RoleEnum.LECTURER:
+        query = query.join(ClassSection, crud_attendance.AttendanceSession.section_id == ClassSection.id).filter(ClassSection.lecturer_id == current_user.id)
+    elif current_user.role == RoleEnum.STUDENT:
+        query = query.join(Enrollment, crud_attendance.AttendanceSession.section_id == Enrollment.section_id).filter(
+            Enrollment.student_id == current_user.id,
+            Enrollment.status == EnrollmentStatusEnum.ENROLLED,
+        )
+    return query.order_by(crud_attendance.AttendanceSession.scheduled_start_at.desc(), crud_attendance.AttendanceSession.id.desc()).all()

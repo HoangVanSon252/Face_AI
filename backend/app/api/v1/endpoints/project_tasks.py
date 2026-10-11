@@ -21,7 +21,7 @@ def create_project_task(data: ProjectTaskCreate, request: Request, db: Session =
     task = ProjectTask(**data.model_dump(), created_by_user_id=current_user.id)
     db.add(task)
     db.flush()
-    write_audit_log(db, "PROJECT_TASK_CREATED", current_user.id, "PROJECT_TASK", task.id, request, {"title": task.title}, commit=False)
+    write_audit_log(db, action="PROJECT_TASK_CREATED", actor_user_id=current_user.id, entity_type="PROJECT_TASK", entity_id=task.id, request=request, details={"title": task.title}, commit=False)
     db.commit()
     db.refresh(task)
     return task
@@ -34,7 +34,7 @@ def update_project_task(task_id: int, data: ProjectTaskUpdate, request: Request,
         raise HTTPException(status_code=404, detail="Project task not found")
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(task, field, value)
-    write_audit_log(db, "PROJECT_TASK_UPDATED", current_user.id, "PROJECT_TASK", task.id, request, {"title": task.title}, commit=False)
+    write_audit_log(db, action="PROJECT_TASK_UPDATED", actor_user_id=current_user.id, entity_type="PROJECT_TASK", entity_id=task.id, request=request, details={"title": task.title}, commit=False)
     db.commit()
     db.refresh(task)
     return task

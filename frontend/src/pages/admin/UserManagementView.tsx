@@ -13,7 +13,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import type { Role, User } from '../../types'
-import { userService } from '../../services/api'
+import { adminUserService } from '../../services/adminUsers'
 import { Modal } from '../../components/common/Modal'
 import { useToast } from '../../components/common/Toast'
 import { cn } from '../../lib/utils'
@@ -39,11 +39,12 @@ export function UserManagementView() {
   const [formUsername, setFormUsername] = useState('')
   const [formFullName, setFormFullName] = useState('')
   const [formEmail, setFormEmail] = useState('')
+  const [formPassword, setFormPassword] = useState('')
   const [formRole, setFormRole] = useState<Role>('student')
   const [formDepartment, setFormDepartment] = useState('Khoa Công nghệ thông tin')
 
   const loadUsers = async () => {
-    const list = await userService.getUsers()
+    const list = await adminUserService.getUsers()
     setUsers(list)
   }
 
@@ -61,7 +62,8 @@ export function UserManagementView() {
   })
 
   const handleToggleStatus = async (user: User) => {
-    const newStatus = await userService.toggleUserStatus(user.userId)
+    const updated = await adminUserService.setUserActive(user, !user.isActive)
+    const newStatus = updated.isActive
     showToast(
       `Đã ${newStatus ? 'mở khóa' : 'khóa'} tài khoản ${user.fullName} (${user.userId})!`,
       newStatus ? 'success' : 'error'
@@ -71,7 +73,7 @@ export function UserManagementView() {
 
   const handleUpdateRole = async () => {
     if (!editRoleUser) return
-    await userService.updateUserRole(editRoleUser.userId, newSelectedRole)
+    await adminUserService.updateUser(editRoleUser, { role: newSelectedRole })
     showToast(`Đã đổi vai trò của ${editRoleUser.fullName} thành ${newSelectedRole}!`, 'success')
     setEditRoleUser(null)
     loadUsers()
@@ -91,7 +93,7 @@ export function UserManagementView() {
       showToast('Họ tên và email không được để trống!', 'error')
       return
     }
-    await userService.updateUser(editInfoUser.userId, {
+    await adminUserService.updateUser(editInfoUser, {
       fullName: editFullName.trim(),
       email: editEmail.trim(),
       department: editDepartment.trim(),
@@ -102,19 +104,19 @@ export function UserManagementView() {
   }
 
   const handleDeleteUser = async (u: User) => {
-    if (!confirm(`Bạn có chắc chắn muốn xóa vĩnh viễn tài khoản "${u.fullName}" (${u.userId})?`)) return
-    await userService.deleteUser(u.userId)
-    showToast(`Đã xóa tài khoản ${u.userId} thành công!`, 'info')
+    if (!confirm(`Khóa tài khoản "${u.fullName}" (${u.userId})? Dữ liệu điểm danh vẫn được giữ lại.`)) return
+    await adminUserService.setUserActive(u, false)
+    showToast(`Đã khóa tài khoản ${u.userId}.`, 'info')
     loadUsers()
   }
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!formUserId || !formFullName || !formEmail) {
+    if (!formUserId || !formFullName || !formEmail || formPassword.length < 12) {
       showToast('Vui lòng điền đủ mã định danh, họ tên và email!', 'error')
       return
     }
-    await userService.createUser({
+    await adminUserService.createUser({
       userId: formUserId.toUpperCase().trim(),
       username: formUsername.trim() || formUserId.toLowerCase().trim(),
       fullName: formFullName.trim(),
@@ -122,20 +124,14 @@ export function UserManagementView() {
       role: formRole,
       department: formDepartment,
       isActive: true,
-      hasFaceRegistered: false,
-      avatar: formFullName
-        .split(' ')
-        .slice(-2)
-        .map((p) => p[0])
-        .join('')
-        .toUpperCase(),
-    })
+    }, formPassword)
     showToast(`Đã tạo tài khoản người dùng ${formFullName}!`, 'success')
     setShowCreateModal(false)
     setFormUserId('')
     setFormUsername('')
     setFormFullName('')
     setFormEmail('')
+    setFormPassword('')
     loadUsers()
   }
 
@@ -373,6 +369,18 @@ export function UserManagementView() {
               required
               className="w-full px-3.5 py-2 text-xs rounded-lg border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600"
             />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Initial password *</label>
+            <input
+              type="password"
+              minLength={12}
+              value={formPassword}
+              onChange={(e) => setFormPassword(e.target.value)}
+              required
+              className="w-full px-3.5 py-2 text-xs rounded-lg border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600"
+            />
+            <p className="mt-1 text-[10px] text-slate-400">At least 12 characters. Send it to the user through a secure channel.</p>
           </div>
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">Vai trò hệ thống (RBAC) *</label>

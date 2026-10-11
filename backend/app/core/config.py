@@ -76,6 +76,10 @@ class Settings(BaseSettings):
         connect_args: dict = {"connect_timeout": self.DB_CONNECT_TIMEOUT}
         if self.MYSQL_SSL_REQUIRED:
             certificate_path = self.MYSQL_SSL_CA
+            if certificate_path and not Path(certificate_path).exists():
+                local_fallback = Path(__file__).resolve().parents[2] / "certs" / "ca.pem"
+                if local_fallback.exists():
+                    certificate_path = str(local_fallback)
             if self.MYSQL_SSL_CA_BASE64:
                 try:
                     certificate = base64.b64decode(
