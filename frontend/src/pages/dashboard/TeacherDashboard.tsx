@@ -1,22 +1,23 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Users,
   CalendarCheck,
   Clock3,
   ShieldCheck,
   BookOpen,
-  ChevronDown,
   Search,
   Check,
   X,
   MoreHorizontal,
   type LucideIcon,
 } from 'lucide-react'
-import type { AttendanceLog } from '../../types'
+import type { AttendanceLog, AttendanceSession, ClassItem, ComplaintRequest, AuditLog, User } from '../../types'
+import { classService, sessionService, complaintService, auditService } from '../../services/api'
 import { useToast } from '../../components/common/Toast'
 import { cn } from '../../lib/utils'
 
 interface TeacherDashboardProps {
+  currentUser?: User
   pendingLogs: AttendanceLog[]
   onApproveLog: (id: number) => void
   onRejectLog: (id: number) => void
@@ -39,6 +40,7 @@ const TONE_DOT: Record<string, string> = {
 }
 
 export function TeacherDashboard({
+  currentUser,
   pendingLogs,
   onApproveLog,
   onRejectLog,
@@ -48,6 +50,30 @@ export function TeacherDashboard({
   const [query, setQuery] = useState('')
   const { showToast } = useToast()
 
+  const [classes, setClasses] = useState<ClassItem[]>([])
+  const [sessions, setSessions] = useState<AttendanceSession[]>([])
+  const [complaints, setComplaints] = useState<ComplaintRequest[]>([])
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([])
+  useEffect(() => {
+    const loadRealData = async () => {
+      try {
+        const [clsRes, sesRes, cmpRes, logRes] = await Promise.all([
+          classService.getClasses().catch(() => []),
+          sessionService.getSessions().catch(() => []),
+          complaintService.getComplaints().catch(() => []),
+          auditService.getLogs().catch(() => []),
+        ])
+        setClasses(clsRes)
+        setSessions(sesRes)
+        setComplaints(cmpRes)
+        setAuditLogs(logRes)
+      } catch (err) {
+        console.error('Lỗi khi tải dữ liệu giảng viên:', err)
+      }
+    }
+    loadRealData()
+  }, [])
+
   const filtered = pendingLogs.filter(
     (item) =>
       item.studentName.toLowerCase().includes(query.toLowerCase()) ||
@@ -55,27 +81,50 @@ export function TeacherDashboard({
       item.classId.toLowerCase().includes(query.toLowerCase())
   )
 
-  const activities = [
-    { time: '08:05', title: 'Phiên điểm danh hoàn tất', desc: 'Lập trình Web - K17 · 35/42 có mặt', tone: 'teal' },
-    { time: '07:58', title: 'Cần kiểm duyệt AI', desc: 'Cơ sở dữ liệu · Độ tin cậy 67%', tone: 'amber' },
-    { time: '07:45', title: 'Khiếu nại mới từ sinh viên', desc: 'Trần Minh Khoa · SV20240128', tone: 'coral' },
-    { time: 'Hôm qua', title: 'Báo cáo chuyên cần tháng', desc: 'Đã tổng hợp 86 phiên học', tone: 'blue' },
-  ]
+  // Dynamic calculations
+  const totalStudents = classes.reduce((acc, c) => acc + (c.studentCount || 0), 0)
+  const activeSession = sessions.find((s) => s.status === 'active')
+  const pendingComplaints = complaints.filter((c) => c.status === 'pending').length
+
+  const activities = auditLogs.slice(0, 5).map((l, idx) => ({
+    time: l.time || 'Vừa xong',
+    title: l.action,
+    desc: `${l.actor}: ${l.detail}`,
+    tone: idx % 3 === 0 ? 'teal' : idx % 3 === 1 ? 'blue' : 'amber',
+  }))
 
   return (
     <>
       {/* Stats row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-        <StatCard icon={Users} label="TỔNG SINH VIÊN" value="1,248" detail="↑ 4.8% so với kỳ trước" tone="teal" />
-        <StatCard icon={CalendarCheck} label="ĐIỂM DANH HÔM NAY" value="94.2%" detail="↑ 2.1% so với hôm qua" tone="blue" />
+        <StatCard
+          icon={Users}
+          label="TỔNG SINH VIÊN"
+          value={totalStudents > 0 ? totalStudents.toLocaleString() : `${classes.length} Lớp`}
+          detail={`Thuộc ${classes.length} lớp học phần phụ trách`}
+          tone="teal"
+        />
+        <StatCard
+          icon={CalendarCheck}
+          label="PHIÊN ĐIỂM DANH"
+          value={String(sessions.length).padStart(2, '0')}
+          detail={activeSession ? `1 phiên đang mở (${activeSession.classId})` : 'Chưa có phiên nào đang mở'}
+          tone="blue"
+        />
         <StatCard
           icon={Clock3}
           label="CHỜ DUYỆT AI"
           value={String(pendingLogs.length).padStart(2, '0')}
-          detail="Confidence 60% - 84%"
+          detail="Độ tin cậy 60% - 84%"
           tone="amber"
         />
-        <StatCard icon={ShieldCheck} label="KHIẾU NẠI MỚI" value="04" detail="Cần phản hồi sớm" tone="coral" />
+        <StatCard
+          icon={ShieldCheck}
+          label="KHIẾU NẠI MỚI"
+          value={String(pendingComplaints).padStart(2, '0')}
+          detail="Cần phản hồi từ sinh viên"
+          tone="coral"
+        />
       </div>
 
       {/* Middle row: chart + live class */}
@@ -84,55 +133,101 @@ export function TeacherDashboard({
         <div className="bg-white border border-[#e4ebeb] rounded-[14px] p-5">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-[13px] font-bold text-[#172b35]">Tỷ lệ điểm danh</h2>
-              <p className="text-[11px] text-[#8b999d] mt-0.5">Tổng quan 7 ngày học gần nhất</p>
+              <h2 className="text-[13px] font-bold text-[#172b35]">Tổng quan lớp học & phiên</h2>
+              <p className="text-[11px] text-[#8b999d] mt-0.5">
+                Dữ liệu thực tế từ cơ sở dữ liệu hệ thống{currentUser?.fullName ? ` · Giảng viên: ${currentUser.fullName}` : ''}
+              </p>
             </div>
-            <button className="flex items-center gap-1.5 text-xs text-[#6e7d82] bg-[#f5f8f8] border border-[#e4ebeb] rounded-lg px-2.5 py-1.5 hover:border-[#148f83]/40">
-              7 ngày qua <ChevronDown size={13} />
-            </button>
-          </div>
-          <MiniChart />
-        </div>
-
-        {/* Live class */}
-        <div className="bg-white border border-[#e4ebeb] rounded-[14px] p-5">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-[13px] font-bold text-[#172b35]">Lớp đang diễn ra</h2>
-              <p className="text-[11px] text-[#8b999d] mt-0.5">Thứ tư · Phòng A-301</p>
-            </div>
-            <span className="flex items-center gap-1 bg-[#e0f5f1] text-[#138d81] text-[10px] font-bold px-2 py-1 rounded-full">
-              <span className="w-1.5 h-1.5 bg-[#138d81] rounded-full animate-pulse" />
-              LIVE
+            <span className="text-xs font-semibold text-[#148f83] bg-[#e0f5f1] px-2.5 py-1 rounded-md">
+              {classes.length} Lớp học phần
             </span>
           </div>
 
-          <div className="bg-[#f5f8f8] border border-[#e4ebeb] rounded-xl p-3.5 mb-3">
-            <div className="flex items-center gap-2.5 mb-2.5">
-              <div className="w-9 h-9 bg-[#e0f5f1] text-[#138d81] rounded-xl grid place-items-center flex-none">
-                <BookOpen size={18} />
+          {classes.length === 0 ? (
+            <div className="h-44 flex flex-col items-center justify-center text-center p-6 text-slate-400">
+              <BookOpen size={32} className="text-slate-300 mb-2" />
+              <p className="text-xs font-medium">Chưa có lớp học phần nào được tạo.</p>
+              <p className="text-[11px] text-slate-400 mt-1">Admin có thể thêm lớp mới trong mục "Lớp học".</p>
+            </div>
+          ) : (
+            <div className="space-y-3 pt-2">
+              {classes.slice(0, 4).map((cls) => {
+                const classSessions = sessions.filter((s) => s.classId === cls.classId)
+                const percent = cls.maxStudents > 0 ? Math.min(100, Math.round((cls.studentCount / cls.maxStudents) * 100)) : 0
+                return (
+                  <div key={cls.id || cls.classId} className="p-3 bg-[#f8fafc] rounded-xl border border-slate-100">
+                    <div className="flex items-center justify-between text-xs mb-1.5">
+                      <div className="font-semibold text-slate-800">
+                        {cls.className} <span className="text-slate-400 font-mono text-[11px]">({cls.classId})</span>
+                      </div>
+                      <span className="font-bold text-teal-700">{cls.studentCount} / {cls.maxStudents} SV ({percent}%)</span>
+                    </div>
+                    <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
+                      <div className="h-full bg-teal-600 rounded-full" style={{ width: `${percent}%` }} />
+                    </div>
+                    <div className="flex justify-between items-center text-[10px] text-slate-400 mt-1.5">
+                      <span>Phòng: {cls.room || 'Phòng học tiêu chuẩn'}</span>
+                      <span>Đã tạo: {classSessions.length} phiên</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Live class card */}
+        <div className="bg-white border border-[#e4ebeb] rounded-[14px] p-5 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-[13px] font-bold text-[#172b35]">Phiên điểm danh</h2>
+                <p className="text-[11px] text-[#8b999d] mt-0.5">Trạng thái thời gian thực</p>
               </div>
-              <div className="min-w-0">
-                <p className="text-xs font-bold text-[#172b35] truncate">Lập trình Web nâng cao</p>
-                <p className="text-[10px] text-[#8b999d]">IT308 · Phòng A-301</p>
+              {activeSession ? (
+                <span className="flex items-center gap-1 bg-[#e0f5f1] text-[#138d81] text-[10px] font-bold px-2 py-1 rounded-full">
+                  <span className="w-1.5 h-1.5 bg-[#138d81] rounded-full animate-pulse" />
+                  LIVE
+                </span>
+              ) : (
+                <span className="bg-slate-100 text-slate-500 text-[10px] font-semibold px-2 py-1 rounded-full">
+                  CLOSED
+                </span>
+              )}
+            </div>
+
+            {activeSession ? (
+              <div className="bg-[#f5f8f8] border border-[#e4ebeb] rounded-xl p-3.5 mb-3">
+                <div className="flex items-center gap-2.5 mb-2.5">
+                  <div className="w-9 h-9 bg-[#e0f5f1] text-[#138d81] rounded-xl grid place-items-center flex-none">
+                    <BookOpen size={18} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-[#172b35] truncate">{activeSession.className}</p>
+                    <p className="text-[10px] text-[#8b999d]">{activeSession.classId} · {activeSession.room}</p>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between text-[10px] text-[#8b999d] mt-2 pt-2 border-t border-slate-200">
+                  <span className="flex items-center gap-1">
+                    <Users size={12} /> {activeSession.presentCount} / {activeSession.totalEnrolled} SV có mặt
+                  </span>
+                  <span>{activeSession.startTime} — {activeSession.endTime}</span>
+                </div>
               </div>
-              <strong className="ml-auto text-[#138d81] text-sm font-bold">83%</strong>
-            </div>
-            {/* Progress bar */}
-            <div className="h-1.5 bg-[#e4ebeb] rounded-full overflow-hidden mb-2.5">
-              <div className="h-full bg-[#148f83] rounded-full" style={{ width: '83%' }} />
-            </div>
-            <div className="flex items-center justify-between text-[10px] text-[#8b999d]">
-              <span className="flex items-center gap-1"><Users size={12} /> 35 / 42 sinh viên có mặt</span>
-              <span>08:00 — 10:00</span>
-            </div>
+            ) : (
+              <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-4 text-center my-3">
+                <BookOpen size={24} className="mx-auto text-slate-300 mb-1.5" />
+                <p className="text-xs font-medium text-slate-700">Chưa có phiên nào đang mở</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">Mở phiên điểm danh để bắt đầu quét nhận diện AI.</p>
+              </div>
+            )}
           </div>
 
           <button
             onClick={onOpenLiveSession}
-            className="w-full flex items-center justify-center gap-1.5 border border-[#148f83] text-[#148f83] text-xs font-semibold rounded-xl py-2.5 hover:bg-[#eaf7f5] transition-colors"
+            className="w-full flex items-center justify-center gap-1.5 border border-[#148f83] text-[#148f83] text-xs font-semibold rounded-xl py-2.5 hover:bg-[#eaf7f5] transition-colors mt-2"
           >
-            Xem chi tiết phiên điểm danh <span>→</span>
+            {activeSession ? 'Xem chi tiết phiên điểm danh' : 'Mở phiên điểm danh mới'} <span>→</span>
           </button>
         </div>
       </div>
@@ -144,7 +239,7 @@ export function TeacherDashboard({
           <div className="flex items-center justify-between mb-3">
             <div>
               <h2 className="text-[13px] font-bold text-[#172b35]">Hàng chờ duyệt AI (Review Queue)</h2>
-              <p className="text-[11px] text-[#8b999d] mt-0.5">Nhận diện confidence 60%–84% (FR-08)</p>
+              <p className="text-[11px] text-[#8b999d] mt-0.5">Nhận diện độ tin cậy 60%–84% (FR-08)</p>
             </div>
             <button onClick={onGoToAttendance} className="text-xs text-[#148f83] font-semibold hover:underline">
               Xem tất cả →
@@ -162,15 +257,14 @@ export function TeacherDashboard({
                 className="flex-1 text-xs bg-transparent outline-none text-[#172b35] placeholder:text-[#b0bec2]"
               />
             </div>
-            <button className="flex items-center gap-1.5 text-xs text-[#6e7d82] bg-[#f5f8f8] border border-[#e4ebeb] rounded-xl px-3 hover:border-[#148f83]/40">
-              Tất cả lớp <ChevronDown size={13} />
-            </button>
           </div>
 
           {/* Table */}
           <div className="overflow-x-auto">
             {filtered.length === 0 ? (
-              <div className="text-center py-8 text-xs text-[#8b999d]">Không có bản ghi nào cần duyệt.</div>
+              <div className="text-center py-8 text-xs text-[#8b999d]">
+                Không có bản ghi nào trong hàng đợi cần duyệt thủ công.
+              </div>
             ) : (
               <table className="w-full text-xs">
                 <thead>
@@ -178,7 +272,7 @@ export function TeacherDashboard({
                     <th className="text-left pb-2 text-[10px] font-bold text-[#a8b5b8] tracking-wide uppercase px-1">Sinh viên</th>
                     <th className="text-left pb-2 text-[10px] font-bold text-[#a8b5b8] tracking-wide uppercase px-1">Lớp</th>
                     <th className="text-left pb-2 text-[10px] font-bold text-[#a8b5b8] tracking-wide uppercase px-1">Thời gian</th>
-                    <th className="text-left pb-2 text-[10px] font-bold text-[#a8b5b8] tracking-wide uppercase px-1">Confidence</th>
+                    <th className="text-left pb-2 text-[10px] font-bold text-[#a8b5b8] tracking-wide uppercase px-1">Độ tin cậy</th>
                     <th className="text-center pb-2 text-[10px] font-bold text-[#a8b5b8] tracking-wide uppercase px-1">Thao tác</th>
                   </tr>
                 </thead>
@@ -233,22 +327,26 @@ export function TeacherDashboard({
         <div className="bg-white border border-[#e4ebeb] rounded-[14px] p-5">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-[13px] font-bold text-[#172b35]">Hoạt động gần đây</h2>
-              <p className="text-[11px] text-[#8b999d] mt-0.5">Cập nhật realtime</p>
+              <h2 className="text-[13px] font-bold text-[#172b35]">Nhật ký hệ thống</h2>
+              <p className="text-[11px] text-[#8b999d] mt-0.5">Sự kiện kiểm toán thực</p>
             </div>
             <MoreHorizontal size={16} className="text-[#8b999d]" />
           </div>
           <div className="flex flex-col gap-0.5">
-            {activities.map((item) => (
-              <div key={item.time + item.title} className="flex items-start gap-3 py-2.5 border-b border-[#f0f4f4] last:border-0">
-                <div className={cn('w-2 h-2 rounded-full mt-1 flex-none', TONE_DOT[item.tone])} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-[12px] font-semibold text-[#172b35] leading-tight">{item.title}</p>
-                  <p className="text-[10.5px] text-[#6e7d82] mt-0.5 truncate">{item.desc}</p>
+            {activities.length === 0 ? (
+              <p className="text-xs text-slate-400 py-4 text-center">Chưa có nhật ký ghi nhận.</p>
+            ) : (
+              activities.map((item, idx) => (
+                <div key={idx} className="flex items-start gap-3 py-2.5 border-b border-[#f0f4f4] last:border-0">
+                  <div className={cn('w-2 h-2 rounded-full mt-1 flex-none', TONE_DOT[item.tone])} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[12px] font-semibold text-[#172b35] leading-tight">{item.title}</p>
+                    <p className="text-[10.5px] text-[#6e7d82] mt-0.5 truncate">{item.desc}</p>
+                  </div>
+                  <time className="text-[10px] text-[#a8b5b8] flex-none">{item.time}</time>
                 </div>
-                <time className="text-[10px] text-[#a8b5b8] flex-none">{item.time}</time>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -267,45 +365,7 @@ function StatCard({ icon: Icon, label, value, detail, tone }: {
       <div className="min-w-0">
         <p className="text-[9px] font-bold text-[#a8b5b8] tracking-widest uppercase">{label}</p>
         <p className="text-2xl font-black text-[#172b35] leading-tight mt-0.5">{value}</p>
-        <p className="text-[10px] text-[#8b999d] mt-0.5">{detail}</p>
-      </div>
-    </div>
-  )
-}
-
-function MiniChart() {
-  const bars = [88, 94, 91, 96, 89, 93, 97]
-  const days = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN']
-  return (
-    <div className="flex flex-col gap-3">
-      {/* SVG area chart */}
-      <div className="h-[130px] relative">
-        <svg viewBox="0 0 600 180" preserveAspectRatio="none" className="w-full h-full" aria-label="Biểu đồ tỷ lệ điểm danh">
-          <path
-            d="M0,76 C40,68 48,92 86,81 S139,54 171,67 S210,83 257,61 S303,45 342,57 S392,31 428,47 S470,65 514,43 S555,34 600,26 V180 H0Z"
-            fill="rgba(20, 143, 131, 0.12)"
-          />
-          <path
-            d="M0,76 C40,68 48,92 86,81 S139,54 171,67 S210,83 257,61 S303,45 342,57 S392,31 428,47 S470,65 514,43 S555,34 600,26"
-            fill="none"
-            stroke="#148f83"
-            strokeWidth="2.5"
-          />
-        </svg>
-      </div>
-      {/* Bar labels + values */}
-      <div className="grid grid-cols-7 gap-1">
-        {bars.map((val, i) => (
-          <div key={days[i]} className="flex flex-col items-center gap-1">
-            <div className="h-12 w-full flex items-end">
-              <div
-                className="w-full rounded-t-[3px] bg-[#148f83]/20 hover:bg-[#148f83]/40 transition-colors"
-                style={{ height: `${val}%` }}
-              />
-            </div>
-            <span className="text-[9px] text-[#a8b5b8] font-medium">{days[i]}</span>
-          </div>
-        ))}
+        <p className="text-[10px] text-[#8b999d] mt-0.5 truncate">{detail}</p>
       </div>
     </div>
   )

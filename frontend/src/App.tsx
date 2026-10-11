@@ -67,18 +67,6 @@ function MainApp() {
     void restoreSession()
   }, [])
 
-  // Sync role changes
-  const handleRoleChange = (newRole: Role) => {
-    void newRole
-    showToast('Role switching is disabled. Permissions come from the signed-in account.', 'info')
-    return
-    setRole(newRole)
-    const user = authService.getCurrentUser(newRole)
-    setCurrentUser(user)
-    setActiveView('Tổng quan')
-    showToast(`Đã chuyển sang vai trò ${newRole.toUpperCase()} (${user.fullName})`, 'info')
-  }
-
   const handleLogout = async () => {
     await authService.logout()
     setCurrentUser(null)
@@ -172,7 +160,6 @@ function MainApp() {
           activeView={activeView}
           role={role}
           currentUser={currentUser}
-          onRoleChange={handleRoleChange}
           onOpenMobileMenu={() => setMobileMenu(true)}
         />
 
@@ -225,6 +212,7 @@ function MainApp() {
           {/* View Routing */}
           {activeView === 'Tổng quan' && role === 'teacher' && (
             <TeacherDashboard
+              currentUser={currentUser}
               pendingLogs={pendingLogs}
               onApproveLog={async (id) => {
                 await attendanceService.approveLog(id)
@@ -298,7 +286,7 @@ function MainApp() {
           )}
 
           {activeView === 'Người dùng' && (
-            <UserManagementView />
+            <UserManagementView currentUser={currentUser} onUserUpdated={(u) => setCurrentUser(u)} />
           )}
 
           {activeView === 'Project management' && role === 'admin' && (

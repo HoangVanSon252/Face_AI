@@ -1,9 +1,9 @@
+import { useState, useEffect } from 'react'
 import {
   CalendarCheck,
   Clock3,
   BookOpen,
   ShieldCheck,
-  ChevronDown,
   Camera,
   CheckCircle2,
   ArrowRight,
@@ -11,7 +11,8 @@ import {
   MapPin,
   type LucideIcon,
 } from 'lucide-react'
-import type { User } from '../../types'
+import type { User, ClassItem, AttendanceLog, ComplaintRequest } from '../../types'
+import { classService, attendanceService, complaintService } from '../../services/api'
 import { cn } from '../../lib/utils'
 
 interface StudentDashboardProps {
@@ -25,129 +26,122 @@ export function StudentDashboard({
   onGoToFaceRegistration,
   onGoToComplaints,
 }: StudentDashboardProps) {
+  const [classes, setClasses] = useState<ClassItem[]>([])
+  const [logs, setLogs] = useState<AttendanceLog[]>([])
+  const [complaints, setComplaints] = useState<ComplaintRequest[]>([])
+  useEffect(() => {
+    const loadRealStudentData = async () => {
+      try {
+        const [clsRes, logRes, cmpRes] = await Promise.all([
+          classService.getClasses().catch(() => []),
+          attendanceService.getStudentLogs(currentUser.userId).catch(() => []),
+          complaintService.getStudentComplaints(currentUser.userId).catch(() => []),
+        ])
+        setClasses(clsRes)
+        setLogs(logRes)
+        setComplaints(cmpRes)
+      } catch (err) {
+        console.error('Lỗi khi tải dữ liệu sinh viên:', err)
+      }
+    }
+    loadRealStudentData()
+  }, [currentUser.userId])
+
+  // Dynamic calculations
+  const totalLogs = logs.length
+  const presentCount = logs.filter((l) => l.status === 'present').length
+  const attendanceRate = totalLogs > 0 ? Math.round((presentCount / totalLogs) * 100) : 100
+  const pendingComplaints = complaints.filter((c) => c.status === 'pending').length
+
   return (
     <div className="space-y-6">
       {/* Stats Cards */}
       <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
           icon={CalendarCheck}
-          label="ĐIỂM DANH THÁNG NÀY"
-          value="96.4%"
-          detail="Tốt hơn 3.2% tháng trước"
+          label="TỶ LỆ CHUYÊN CẦN"
+          value={`${attendanceRate}%`}
+          detail={totalLogs > 0 ? `Tính trên ${totalLogs} buổi điểm danh` : 'Chưa có buổi điểm danh nào'}
           tone="teal"
-          trend="+3.2%"
+          trend={attendanceRate >= 90 ? 'Đạt chuẩn' : 'Cần chú ý'}
         />
         <StatCard
           icon={Clock3}
-          label="CÓ MẶT"
-          value="27"
-          detail="Trên tổng số 28 buổi học"
+          label="BUỔI CÓ MẶT"
+          value={String(presentCount).padStart(2, '0')}
+          detail={`Trên tổng số ${totalLogs} buổi học đã ghi nhận`}
           tone="blue"
         />
         <StatCard
           icon={BookOpen}
-          label="LỚP HÔM NAY"
-          value="03"
-          detail="Buổi học tiếp theo 13:30"
+          label="LỚP HỌC KỲ NÀY"
+          value={String(classes.length).padStart(2, '0')}
+          detail="Học phần đăng ký trong học kỳ"
           tone="amber"
         />
         <StatCard
           icon={ShieldCheck}
-          label="KHIẾU NẠI"
-          value="01"
-          detail="Xem đơn đang chờ duyệt →"
+          label="KHIẾU NẠI ĐIỂM DANH"
+          value={String(pendingComplaints).padStart(2, '0')}
+          detail="Xem trạng thái khiếu nại →"
           tone="coral"
           onClick={onGoToComplaints}
         />
       </section>
 
-      {/* Main Grid: Today's Schedule & Attendance Summary */}
+      {/* Main Grid: Class Schedule & Attendance Summary */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Schedule List */}
+        {/* Classes list */}
         <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
           <div className="p-5 border-b border-slate-100 flex items-center justify-between flex-wrap gap-2">
             <div>
-              <h2 className="text-base font-bold text-slate-800">Lịch học hôm nay</h2>
-              <p className="text-xs text-slate-500 mt-0.5">Thứ tư · 11 tháng 09, 2026</p>
+              <h2 className="text-base font-bold text-slate-800">Danh sách lớp học phần</h2>
+              <p className="text-xs text-slate-500 mt-0.5">Dữ liệu đăng ký học kỳ FA26 từ cơ sở dữ liệu</p>
             </div>
-            <button className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200/70 rounded-lg transition-colors">
-              Hôm nay <ChevronDown size={14} />
-            </button>
+            <span className="text-xs font-semibold text-teal-700 bg-teal-50 px-2.5 py-1 rounded-md border border-teal-100">
+              {classes.length} Lớp học phần
+            </span>
           </div>
 
           <div className="p-5 divide-y divide-slate-100">
-            {/* Session 1 */}
-            <div className="py-3.5 first:pt-0 last:pb-0 flex items-start gap-4 hover:bg-slate-50/50 p-2 rounded-lg transition-colors">
-              <div className="text-center w-14 shrink-0 bg-slate-50 py-1.5 rounded-md border border-slate-100">
-                <span className="text-xs font-bold text-slate-800 block">08:00</span>
-                <span className="text-[11px] text-slate-400">10:00</span>
+            {classes.length === 0 ? (
+              <div className="py-8 text-center text-slate-400">
+                <BookOpen size={32} className="mx-auto text-slate-300 mb-2" />
+                <p className="text-xs font-medium text-slate-600">Bạn chưa được ghi danh vào lớp học phần nào.</p>
+                <p className="text-[11px] text-slate-400 mt-1">Vui lòng liên hệ phòng đào tạo hoặc giảng viên quản lý.</p>
               </div>
-              <div className="w-9 h-9 rounded-lg bg-teal-50 border border-teal-100 flex items-center justify-center text-teal-600 shrink-0 mt-0.5">
-                <BookOpen size={18} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-sm font-semibold text-slate-800 truncate">Lập trình Web nâng cao</h3>
-                <div className="flex items-center gap-3 text-xs text-slate-500 mt-1 flex-wrap">
-                  <span className="font-mono text-slate-600">IT308</span>
-                  <span>·</span>
-                  <span className="flex items-center gap-1"><MapPin size={12} /> Phòng A-301</span>
-                  <span>·</span>
-                  <span>Cô Nguyễn Thị Lan</span>
-                </div>
-              </div>
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/60 shrink-0">
-                <CheckCircle2 size={13} />
-                Đã điểm danh (98.4%)
-              </span>
-            </div>
+            ) : (
+              classes.map((cls) => {
+                const classLogs = logs.filter((l) => l.classId === cls.classId)
+                const classPresent = classLogs.filter((l) => l.status === 'present').length
+                const classRate = classLogs.length > 0 ? Math.round((classPresent / classLogs.length) * 100) : 100
 
-            {/* Session 2 */}
-            <div className="py-3.5 first:pt-0 last:pb-0 flex items-start gap-4 hover:bg-slate-50/50 p-2 rounded-lg transition-colors">
-              <div className="text-center w-14 shrink-0 bg-slate-50 py-1.5 rounded-md border border-slate-100">
-                <span className="text-xs font-bold text-slate-800 block">13:30</span>
-                <span className="text-[11px] text-slate-400">15:30</span>
-              </div>
-              <div className="w-9 h-9 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-600 shrink-0 mt-0.5">
-                <BookOpen size={18} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-sm font-semibold text-slate-800 truncate">Cơ sở dữ liệu nâng cao</h3>
-                <div className="flex items-center gap-3 text-xs text-slate-500 mt-1 flex-wrap">
-                  <span className="font-mono text-slate-600">IT204</span>
-                  <span>·</span>
-                  <span className="flex items-center gap-1"><MapPin size={12} /> Phòng B-202</span>
-                  <span>·</span>
-                  <span>Cô Nguyễn Thị Lan</span>
-                </div>
-              </div>
-              <span className="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-full bg-blue-50 text-blue-700 border border-blue-200/60 shrink-0">
-                Sắp tới
-              </span>
-            </div>
-
-            {/* Session 3 */}
-            <div className="py-3.5 first:pt-0 last:pb-0 flex items-start gap-4 hover:bg-slate-50/50 p-2 rounded-lg transition-colors">
-              <div className="text-center w-14 shrink-0 bg-slate-50 py-1.5 rounded-md border border-slate-100">
-                <span className="text-xs font-bold text-slate-800 block">16:00</span>
-                <span className="text-[11px] text-slate-400">18:00</span>
-              </div>
-              <div className="w-9 h-9 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-600 shrink-0 mt-0.5">
-                <BookOpen size={18} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-sm font-semibold text-slate-800 truncate">Kỹ năng nghề nghiệp</h3>
-                <div className="flex items-center gap-3 text-xs text-slate-500 mt-1 flex-wrap">
-                  <span className="font-mono text-slate-600">SS101</span>
-                  <span>·</span>
-                  <span className="flex items-center gap-1"><MapPin size={12} /> Phòng C-105</span>
-                  <span>·</span>
-                  <span>Thầy Trần Văn Hùng</span>
-                </div>
-              </div>
-              <span className="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-full bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
-                Chưa diễn ra
-              </span>
-            </div>
+                return (
+                  <div
+                    key={cls.id || cls.classId}
+                    className="py-3.5 first:pt-0 last:pb-0 flex items-start gap-4 hover:bg-slate-50/50 p-2 rounded-lg transition-colors"
+                  >
+                    <div className="w-10 h-10 rounded-lg bg-teal-50 border border-teal-100 flex items-center justify-center text-teal-600 shrink-0 mt-0.5">
+                      <BookOpen size={18} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-sm font-semibold text-slate-800 truncate">{cls.className}</h3>
+                      <div className="flex items-center gap-3 text-xs text-slate-500 mt-1 flex-wrap">
+                        <span className="font-mono text-slate-600 font-medium">{cls.classId}</span>
+                        <span>·</span>
+                        <span className="flex items-center gap-1"><MapPin size={12} /> {cls.room || 'Phòng học tiêu chuẩn'}</span>
+                        <span>·</span>
+                        <span>{cls.teacherName || 'Giảng viên phụ trách'}</span>
+                      </div>
+                    </div>
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/60 shrink-0">
+                      <CheckCircle2 size={13} />
+                      {classLogs.length > 0 ? `Chuyên cần: ${classRate}%` : 'Sẵn sàng'}
+                    </span>
+                  </div>
+                )
+              })
+            )}
           </div>
         </div>
 
@@ -156,7 +150,7 @@ export function StudentDashboard({
           <div>
             <div className="border-b border-slate-100 pb-3 mb-4">
               <h2 className="text-base font-bold text-slate-800">Tóm tắt chuyên cần</h2>
-              <p className="text-xs text-slate-500 mt-0.5">Học kỳ Fall 2026</p>
+              <p className="text-xs text-slate-500 mt-0.5">Tổng quan học kỳ hiện tại</p>
             </div>
 
             {/* Circular Progress Display */}
@@ -172,7 +166,7 @@ export function StudentDashboard({
                   />
                   <path
                     className="text-teal-600 transition-all duration-1000 ease-out"
-                    strokeDasharray="96, 100"
+                    strokeDasharray={`${attendanceRate}, 100`}
                     strokeWidth="3.5"
                     strokeLinecap="round"
                     stroke="currentColor"
@@ -181,41 +175,31 @@ export function StudentDashboard({
                   />
                 </svg>
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                  <span className="text-2xl font-black text-slate-800">96%</span>
+                  <span className="text-2xl font-black text-slate-800">{attendanceRate}%</span>
                   <span className="text-[11px] font-medium text-slate-400">Tỷ lệ có mặt</span>
                 </div>
               </div>
             </div>
 
-            {/* Bars */}
+            {/* Bars for registered classes */}
             <div className="space-y-3 pt-2">
-              <div>
-                <div className="flex justify-between text-xs font-medium text-slate-700 mb-1">
-                  <span>Lập trình Web</span>
-                  <span className="text-teal-600 font-semibold">98%</span>
-                </div>
-                <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                  <div className="bg-teal-500 h-full rounded-full" style={{ width: '98%' }} />
-                </div>
-              </div>
-              <div>
-                <div className="flex justify-between text-xs font-medium text-slate-700 mb-1">
-                  <span>Cơ sở dữ liệu</span>
-                  <span className="text-teal-600 font-semibold">94%</span>
-                </div>
-                <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                  <div className="bg-teal-500 h-full rounded-full" style={{ width: '94%' }} />
-                </div>
-              </div>
-              <div>
-                <div className="flex justify-between text-xs font-medium text-slate-700 mb-1">
-                  <span>Kỹ năng nghề nghiệp</span>
-                  <span className="text-teal-600 font-semibold">96%</span>
-                </div>
-                <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                  <div className="bg-teal-500 h-full rounded-full" style={{ width: '96%' }} />
-                </div>
-              </div>
+              {classes.slice(0, 3).map((cls) => {
+                const classLogs = logs.filter((l) => l.classId === cls.classId)
+                const classPresent = classLogs.filter((l) => l.status === 'present').length
+                const rate = classLogs.length > 0 ? Math.round((classPresent / classLogs.length) * 100) : 100
+
+                return (
+                  <div key={cls.id || cls.classId}>
+                    <div className="flex justify-between text-xs font-medium text-slate-700 mb-1">
+                      <span className="truncate pr-2">{cls.className}</span>
+                      <span className="text-teal-600 font-semibold">{rate}%</span>
+                    </div>
+                    <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                      <div className="bg-teal-500 h-full rounded-full" style={{ width: `${rate}%` }} />
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           </div>
         </div>
@@ -247,7 +231,7 @@ export function StudentDashboard({
           <p className="text-xs mt-1 text-slate-600 leading-relaxed">
             {currentUser.hasFaceRegistered
               ? 'Đặc trưng sinh trắc học 512D sẵn sàng điểm danh tự động khi bước vào lớp học.'
-              : 'Hãy đăng ký 5–10 mẫu ảnh khuôn mặt qua webcam để hệ thống tự động nhận diện và điểm danh khi vào lớp.'}
+              : 'Hãy đăng ký mẫu ảnh khuôn mặt qua webcam để hệ thống tự động nhận diện và điểm danh khi vào lớp.'}
           </p>
         </div>
         <button

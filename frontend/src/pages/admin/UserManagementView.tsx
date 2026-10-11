@@ -18,7 +18,12 @@ import { Modal } from '../../components/common/Modal'
 import { useToast } from '../../components/common/Toast'
 import { cn } from '../../lib/utils'
 
-export function UserManagementView() {
+interface UserManagementViewProps {
+  currentUser?: User
+  onUserUpdated?: (user: User) => void
+}
+
+export function UserManagementView({ currentUser, onUserUpdated }: UserManagementViewProps = {}) {
   const { showToast } = useToast()
   const [users, setUsers] = useState<User[]>([])
   const [query, setQuery] = useState('')
@@ -73,7 +78,10 @@ export function UserManagementView() {
 
   const handleUpdateRole = async () => {
     if (!editRoleUser) return
-    await adminUserService.updateUser(editRoleUser, { role: newSelectedRole })
+    const updated = await adminUserService.updateUser(editRoleUser, { role: newSelectedRole })
+    if (currentUser && (currentUser.id === updated.id || currentUser.userId === updated.userId)) {
+      onUserUpdated?.(updated)
+    }
     showToast(`Đã đổi vai trò của ${editRoleUser.fullName} thành ${newSelectedRole}!`, 'success')
     setEditRoleUser(null)
     loadUsers()
@@ -93,11 +101,14 @@ export function UserManagementView() {
       showToast('Họ tên và email không được để trống!', 'error')
       return
     }
-    await adminUserService.updateUser(editInfoUser, {
+    const updated = await adminUserService.updateUser(editInfoUser, {
       fullName: editFullName.trim(),
       email: editEmail.trim(),
       department: editDepartment.trim(),
     })
+    if (currentUser && (currentUser.id === updated.id || currentUser.userId === updated.userId)) {
+      onUserUpdated?.(updated)
+    }
     showToast(`Đã cập nhật thông tin cho tài khoản ${editInfoUser.userId}!`, 'success')
     setEditInfoUser(null)
     loadUsers()

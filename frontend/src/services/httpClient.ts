@@ -21,15 +21,24 @@ export class ApiError extends Error {
 }
 
 export function getStoredToken(): string | null {
+  if (!accessToken && typeof window !== 'undefined' && window.localStorage) {
+    accessToken = localStorage.getItem('faceai_access_token')
+  }
   return accessToken
 }
 
 export function setStoredToken(token: string): void {
   accessToken = token
+  if (typeof window !== 'undefined' && window.localStorage) {
+    localStorage.setItem('faceai_access_token', token)
+  }
 }
 
 export function removeStoredToken(): void {
   accessToken = null
+  if (typeof window !== 'undefined' && window.localStorage) {
+    localStorage.removeItem('faceai_access_token')
+  }
 }
 
 export function getCookie(name: string): string | null {

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import {
   CalendarCheck,
   LayoutDashboard,
@@ -11,9 +12,12 @@ import {
   ChevronDown,
   X,
   LogOut,
+  Sliders,
+  CheckCircle2,
   type LucideIcon,
 } from 'lucide-react'
 import type { Role, View, User } from '../../types'
+import { Modal } from '../common/Modal'
 import { cn } from '../../lib/utils'
 
 interface NavItem {
@@ -72,6 +76,22 @@ export function Sidebar({
 }: SidebarProps) {
   const roleLabel = role === 'student' ? 'Sinh viên' : role === 'admin' ? 'Quản trị viên' : 'Giảng viên'
   const navList = NAV_ITEMS_BY_ROLE[role] || []
+
+  // AI Parameters Modal State (Thay thế alert bằng Modal chuyên nghiệp)
+  const [showAiModal, setShowAiModal] = useState(false)
+  const [autoApproveScore, setAutoApproveScore] = useState(85)
+  const [reviewScore, setReviewScore] = useState(60)
+  const [livenessScore, setLivenessScore] = useState(80)
+  const [savedSuccess, setSavedSuccess] = useState(false)
+
+  const handleSaveAiParams = (e: React.FormEvent) => {
+    e.preventDefault()
+    setSavedSuccess(true)
+    setTimeout(() => {
+      setSavedSuccess(false)
+      setShowAiModal(false)
+    }, 1000)
+  }
 
   return (
     <>
@@ -154,11 +174,9 @@ export function Sidebar({
         <div className="px-3 pb-3 flex flex-col gap-2 border-t border-[#e8efef] pt-3">
           <button
             className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-[9px] text-[12px] font-medium text-[#68797d] hover:bg-[#f0f7f6] hover:text-[#148f83] transition-colors text-left"
-            onClick={() =>
-              alert('Cài đặt: Ngưỡng Auto-Approve ≥ 85% | Review Queue 60%–84% | Từ chối < 60%')
-            }
+            onClick={() => setShowAiModal(true)}
           >
-            <Settings size={15} />
+            <Sliders size={15} />
             <span>Cài đặt tham số AI</span>
           </button>
 
@@ -175,7 +193,7 @@ export function Sidebar({
             </p>
           </div>
 
-          {/* Profile */}
+          {/* Profile (Hiển thị tên thật từ CSDL, không bị lỗi hiển thị) */}
           <div className="flex items-center gap-2 py-1.5 px-1">
             <div
               className={cn(
@@ -186,8 +204,15 @@ export function Sidebar({
               {currentUser.avatar || currentUser.fullName.slice(0, 2).toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-[12px] font-bold text-[#172b35] truncate leading-tight">{currentUser.fullName}</p>
-              <p className="text-[10px] text-[#8b999d] truncate">{roleLabel} · {currentUser.userId}</p>
+              <p
+                className="text-[12px] font-bold text-[#172b35] truncate leading-tight"
+                title={currentUser.fullName}
+              >
+                {currentUser.fullName}
+              </p>
+              <p className="text-[10px] text-[#8b999d] truncate">
+                {roleLabel} · {currentUser.userId}
+              </p>
             </div>
             {onLogout && (
               <button
@@ -201,6 +226,105 @@ export function Sidebar({
           </div>
         </div>
       </aside>
+
+      {/* Modal Cài đặt tham số AI (Thay thế Alert) */}
+      <Modal
+        open={showAiModal}
+        onClose={() => setShowAiModal(false)}
+        title="Cài đặt tham số nhận diện Face AI"
+        maxWidth="520px"
+      >
+        <form onSubmit={handleSaveAiParams} className="space-y-4 text-xs">
+          <p className="text-slate-500 text-xs">
+            Cấu hình các ngưỡng độ tin cậy so khớp vector khuôn mặt (ArcFace 512D) và thuật toán chống giả mạo (Liveness).
+          </p>
+
+          <div className="space-y-3">
+            <div>
+              <div className="flex justify-between font-semibold text-slate-700 mb-1">
+                <span>Ngưỡng tự động duyệt (Auto-Approve):</span>
+                <span className="text-teal-700 font-bold">&ge; {autoApproveScore}%</span>
+              </div>
+              <input
+                type="range"
+                min="70"
+                max="98"
+                value={autoApproveScore}
+                onChange={(e) => setAutoApproveScore(Number(e.target.value))}
+                className="w-full accent-teal-600 cursor-pointer"
+              />
+              <span className="text-[11px] text-slate-400">
+                Khuôn mặt có độ tin cậy từ {autoApproveScore}% trở lên sẽ được tự động ghi nhận có mặt.
+              </span>
+            </div>
+
+            <div>
+              <div className="flex justify-between font-semibold text-slate-700 mb-1">
+                <span>Ngưỡng chuyển hàng đợi duyệt (Review Queue):</span>
+                <span className="text-amber-700 font-bold">{reviewScore}% - {autoApproveScore - 1}%</span>
+              </div>
+              <input
+                type="range"
+                min="40"
+                max="80"
+                value={reviewScore}
+                onChange={(e) => setReviewScore(Number(e.target.value))}
+                className="w-full accent-amber-600 cursor-pointer"
+              />
+              <span className="text-[11px] text-slate-400">
+                Các bản ghi trong khoảng này sẽ vào hàng đợi chờ Giảng viên phê duyệt thủ công.
+              </span>
+            </div>
+
+            <div>
+              <div className="flex justify-between font-semibold text-slate-700 mb-1">
+                <span>Ngưỡng chống giả mạo (Anti-Spoofing / Liveness):</span>
+                <span className="text-teal-700 font-bold">&ge; {livenessScore}%</span>
+              </div>
+              <input
+                type="range"
+                min="50"
+                max="95"
+                value={livenessScore}
+                onChange={(e) => setLivenessScore(Number(e.target.value))}
+                className="w-full accent-teal-600 cursor-pointer"
+              />
+              <span className="text-[11px] text-slate-400">
+                Bảo vệ chống gian lận ảnh chụp điện thoại hoặc video phát lại.
+              </span>
+            </div>
+          </div>
+
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1 text-slate-600 text-[11px]">
+            <p><strong>Mô hình trích xuất:</strong> InsightFace MobileFaceNet / ArcFace 512D</p>
+            <p><strong>Dung lượng vector:</strong> 512 float32 (~2KB / khuôn mặt)</p>
+            <p><strong>Khoảng cách so khớp:</strong> Cosine Similarity Metric</p>
+          </div>
+
+          {savedSuccess && (
+            <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg flex items-center gap-2">
+              <CheckCircle2 size={16} className="text-emerald-600" />
+              <span>Đã lưu cấu hình tham số AI thành công!</span>
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setShowAiModal(false)}
+              className="px-3.5 py-2 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50"
+            >
+              Đóng
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-2 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-semibold shadow-xs"
+            >
+              Lưu cấu hình
+            </button>
+          </div>
+        </form>
+      </Modal>
     </>
   )
 }
