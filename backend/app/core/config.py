@@ -14,7 +14,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    PROJECT_NAME: str = "Face Attendance AI"
+    PROJECT_NAME: str = "EduFace AI"
     API_V1_STR: str = "/api/v1"
 
     ENVIRONMENT: Literal["development", "test", "production"] = "development"

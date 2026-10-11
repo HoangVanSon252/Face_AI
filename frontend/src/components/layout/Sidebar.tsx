@@ -116,8 +116,8 @@ export function Sidebar({
             <CalendarCheck size={18} />
           </div>
           <div className="flex flex-col leading-none">
-            <strong className="text-[15px] font-extrabold text-[#172b35] tracking-tight">Attendly</strong>
-            <span className="text-[9px] font-bold text-[#8b999d] tracking-widest mt-0.5">SMART ATTENDANCE</span>
+            <strong className="text-[15px] font-extrabold text-[#172b35] tracking-tight">EduFace AI</strong>
+            <span className="text-[9px] font-bold text-[#148f83] tracking-widest mt-0.5">SMART ATTENDANCE</span>
           </div>
           <button
             className="ml-auto w-7 h-7 grid place-items-center rounded-lg text-[#6e7d82] hover:bg-[#eef3f3] lg:hidden"

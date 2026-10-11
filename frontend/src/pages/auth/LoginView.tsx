@@ -72,7 +72,7 @@ export function LoginView({ onLogin }: LoginViewProps) {
           <div className="inline-flex items-center justify-center w-14 h-14 bg-[#148f83] rounded-2xl shadow-[0_8px_24px_rgba(20,143,131,0.3)] mb-4">
             <CalendarCheck size={28} className="text-white" />
           </div>
-          <h1 className="text-2xl font-extrabold text-[#172b35] tracking-tight">Attendly</h1>
+          <h1 className="text-2xl font-extrabold text-[#172b35] tracking-tight">EduFace AI</h1>
           <p className="text-sm text-[#6e7d82] mt-1">Hệ thống điểm danh thông minh bằng khuôn mặt</p>
         </div>
 
