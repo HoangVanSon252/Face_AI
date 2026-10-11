@@ -132,8 +132,8 @@ export function Sidebar({
             EDU
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-bold text-slate-800 truncate">Học viện Đào tạo</p>
-            <p className="text-[10px] text-teal-700 font-medium truncate">Kỳ FA26 · Khoa CNTT</p>
+            <p className="text-xs font-bold text-slate-800 truncate">Học viện Công nghệ Bưu Chính Viễn Thông</p>
+            <p className="text-[10px] text-teal-700 font-medium truncate">Khoa Công nghệ Thông tin</p>
           </div>
         </div>
 
