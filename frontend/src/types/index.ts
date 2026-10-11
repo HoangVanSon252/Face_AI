@@ -12,6 +12,8 @@ export type View =
   | 'Người dùng'
   | 'Nhật ký kiểm toán'
 
+  | 'Project management'
+
 export interface User {
   id: number
   userId: string // e.g. SV20240128, GV2021042, AD2020008

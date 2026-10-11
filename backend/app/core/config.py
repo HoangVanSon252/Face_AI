@@ -1,42 +1,151 @@
-from pydantic_settings import BaseSettings
+import base64
+import os
+from pathlib import Path
+from typing import Literal
+
+from pydantic import field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "Face Attendance AI"
+    model_config = SettingsConfigDict(
+        env_file="../.env",
+        case_sensitive=True,
+        extra="ignore",
+    )
+
+    PROJECT_NAME: str = "EduFace AI"
     API_V1_STR: str = "/api/v1"
-    
-    # JWT Config
+
+    ENVIRONMENT: Literal["development", "test", "production"] = "development"
+    DEBUG: bool = False
+
     SECRET_KEY: str
+    CSRF_SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15          # 15 phút (ngắn để an toàn)
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
-    # Security
-    CSRF_SECRET_KEY: str = "change-me-csrf-secret" # Đổi trong .env
-    COOKIE_SECURE: bool = False                    # True khi production (HTTPS)
-    COOKIE_SAMESITE: str = "lax"                   # "strict" khi production
-    ALLOWED_ORIGINS: str = "http://localhost:5173"  # Comma-separated
+    COOKIE_SECURE: bool = False
+    COOKIE_SAMESITE: Literal["lax", "strict", "none"] = "lax"
+    ALLOWED_ORIGINS: str = "http://localhost:5173"
+    ALLOWED_HOSTS: str = "localhost,127.0.0.1,testserver,backend"
+    MAX_REQUEST_BODY_SIZE: int = 5 * 1024 * 1024
 
-    # Rate Limiting
-    RATE_LIMIT_LOGIN: str = "5/minute"             # 5 lần login/phút
-    RATE_LIMIT_REGISTER: str = "3/minute"          # 3 lần register/phút
-    RATE_LIMIT_REFRESH: str = "10/minute"          # 10 lần refresh/phút
-    
-    # Database
+    RATE_LIMIT_LOGIN: str = "5/minute"
+    RATE_LIMIT_REGISTER: str = "3/minute"
+    RATE_LIMIT_REFRESH: str = "10/minute"
+
     MYSQL_USER: str
     MYSQL_PASSWORD: str
     MYSQL_HOST: str
     MYSQL_PORT: str
     MYSQL_DB: str
-    
+    MYSQL_SSL_CA: str | None = None
+    MYSQL_SSL_CA_BASE64: str | None = None
+    MYSQL_SSL_REQUIRED: bool = False
+    REDIS_URL: str
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
+    DB_POOL_TIMEOUT: int = 30
+    DB_CONNECT_TIMEOUT: int = 10
+    REPORT_MAX_ROWS: int = 10_000
+
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def parse_debug(cls, value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on", "debug"}:
+                return True
+            if normalized in {"0", "false", "no", "off", "release", "production"}:
+                return False
+        raise ValueError("DEBUG must be a boolean value")
+
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
-        return f"mysql+pymysql://{self.MYSQL_USER}:{self.MYSQL_PASSWORD}@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DB}"
+        return (
+            f"mysql+pymysql://{self.MYSQL_USER}:{self.MYSQL_PASSWORD}"
+            f"@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DB}"
+        )
 
-    # Redis
-    REDIS_URL: str
+    @property
+    def mysql_connect_args(self) -> dict:
+        connect_args: dict = {"connect_timeout": self.DB_CONNECT_TIMEOUT}
+        if self.MYSQL_SSL_REQUIRED:
+            certificate_path = self.MYSQL_SSL_CA
+            if certificate_path and not Path(certificate_path).exists():
+                local_fallback = Path(__file__).resolve().parents[2] / "certs" / "ca.pem"
+                if local_fallback.exists():
+                    certificate_path = str(local_fallback)
+            if self.MYSQL_SSL_CA_BASE64:
+                try:
+                    certificate = base64.b64decode(
+                        self.MYSQL_SSL_CA_BASE64, validate=True
+                    )
+                except ValueError as exc:
+                    raise ValueError("MYSQL_SSL_CA_BASE64 must be valid Base64") from exc
 
-    class Config:
-        env_file = "../.env"
-        case_sensitive = True
+                certificate_file = Path("/tmp/aiven-ca.pem")
+                certificate_file.write_bytes(certificate)
+                certificate_file.chmod(0o600)
+                certificate_path = str(certificate_file)
+
+            if not certificate_path:
+                raise ValueError(
+                    "MYSQL_SSL_CA or MYSQL_SSL_CA_BASE64 is required when "
+                    "MYSQL_SSL_REQUIRED is true"
+                )
+            connect_args["ssl"] = {"ca": certificate_path}
+        return connect_args
+
+    @property
+    def allowed_origins_list(self) -> list[str]:
+        return [
+            origin.strip()
+            for origin in self.ALLOWED_ORIGINS.split(",")
+            if origin.strip()
+        ]
+
+    @property
+    def allowed_hosts_list(self) -> list[str]:
+        hosts = [
+            host.strip()
+            for host in self.ALLOWED_HOSTS.split(",")
+            if host.strip()
+        ]
+        render_hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME", "").strip()
+        if render_hostname and render_hostname not in hosts:
+            hosts.append(render_hostname)
+        return hosts
+
+    @model_validator(mode="after")
+    def validate_production_security(self):
+        if self.ENVIRONMENT != "production":
+            return self
+
+        insecure_secrets = {
+            "change-me",
+            "change-me-csrf-secret",
+            "tao_mot_chuoi_that_dai_va_bao_mat_o_day",
+            "another-random-secret-for-csrf-protection",
+        }
+
+        if len(self.SECRET_KEY) < 32 or self.SECRET_KEY in insecure_secrets:
+            raise ValueError("SECRET_KEY must be a strong production secret")
+
+        if len(self.CSRF_SECRET_KEY) < 32 or self.CSRF_SECRET_KEY in insecure_secrets:
+            raise ValueError("CSRF_SECRET_KEY must be a strong production secret")
+
+        if not self.COOKIE_SECURE:
+            raise ValueError("COOKIE_SECURE must be true in production")
+
+        if "*" in self.allowed_origins_list:
+            raise ValueError("Wildcard CORS origin is forbidden in production")
+
+        return self
+
 
 settings = Settings()

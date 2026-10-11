@@ -12,56 +12,21 @@ import {
   httpClient,
   setStoredToken,
   removeStoredToken,
-  getStoredToken,
 } from './httpClient'
-import {
-  INITIAL_USERS,
-  INITIAL_CLASSES,
-  INITIAL_SESSIONS,
-  INITIAL_ATTENDANCE_LOGS,
-  INITIAL_COMPLAINTS,
-  INITIAL_AUDIT_LOGS,
-} from './mockData'
+import { adminUserService } from './adminUsers'
 
-// Helpers to sync with localStorage for client-side state / offline cache
-const getStored = <T>(key: string, defaultVal: T): T => {
-  try {
-    const item = localStorage.getItem(`attendly_${key}`)
-    return item ? JSON.parse(item) : defaultVal
-  } catch {
-    return defaultVal
-  }
-}
-
-const setStored = <T>(key: string, val: T): void => {
-  try {
-    localStorage.setItem(`attendly_${key}`, JSON.stringify(val))
-  } catch (e) {
-    console.error('Storage error:', e)
-  }
-}
-
-// In-memory + storage cache
-let usersCache = getStored<User[]>('users', INITIAL_USERS)
-let classesCache = getStored<ClassItem[]>('classes', INITIAL_CLASSES)
-let sessionsCache = getStored<AttendanceSession[]>('sessions', INITIAL_SESSIONS)
-let attendanceLogsCache = getStored<AttendanceLog[]>('attendanceLogs', INITIAL_ATTENDANCE_LOGS)
-let complaintsCache = getStored<ComplaintRequest[]>('complaints', INITIAL_COMPLAINTS)
-let auditLogsCache = getStored<AuditLog[]>('auditLogs', INITIAL_AUDIT_LOGS)
-
-// Backend DTO Types
+// ─── Backend DTO Interfaces ──────────────────────────────────
 interface BackendUserResponse {
   id: number
   email: string
   full_name: string
-  role: 'admin' | 'lecturer' | 'student'
-  status: 'active' | 'inactive' | 'locked'
+  role: 'ADMIN' | 'LECTURER' | 'STUDENT' | 'admin' | 'lecturer' | 'student'
+  status: 'ACTIVE' | 'INACTIVE' | 'LOCKED' | 'active' | 'inactive' | 'locked'
   student_profile?: {
     user_id: number
     student_code: string
-    date_of_birth?: string
-    cohort?: string
     major?: string
+    cohort?: string
     administrative_class?: string
   }
   lecturer_profile?: {
@@ -72,44 +37,19 @@ interface BackendUserResponse {
   }
 }
 
-interface BackendStudentItem {
-  user_id: number
-  student_code: string
-  date_of_birth?: string
-  cohort?: string
-  major?: string
-  administrative_class?: string
-  user?: {
-    id: number
-    username: string
-    email: string
-    full_name: string
-    role: string
-    status: string
-  }
-}
-
-interface BackendLecturerItem {
-  user_id: number
-  lecturer_code: string
-  department?: string
-  academic_title?: string
-  user?: {
-    id: number
-    username: string
-    email: string
-    full_name: string
-    role: string
-    status: string
-  }
-}
-
 interface BackendCourseItem {
   id: number
   course_code: string
   course_name: string
   credits: number
   is_active: boolean
+}
+
+interface BackendSemesterItem {
+  id: number
+  code: string
+  name: string
+  status: string
 }
 
 interface BackendSectionItem {
@@ -130,13 +70,68 @@ interface BackendEnrollmentItem {
   enrolled_at: string
 }
 
-// Transform backend user response to frontend User model
+interface BackendSessionItem {
+  id: number
+  section_id: number
+  session_no: number
+  title?: string
+  scheduled_start_at: string
+  scheduled_end_at: string
+  late_after_at: string
+  opened_at?: string
+  closed_at?: string
+  status: 'SCHEDULED' | 'OPEN' | 'CLOSED' | 'CANCELLED'
+  created_by: number
+}
+
+interface BackendAttendanceItem {
+  id: number
+  session_id: number
+  student_id: number
+  status: 'PRESENT' | 'LATE' | 'ABSENT' | 'EXCUSED'
+  verification_method: 'FACE' | 'MANUAL'
+  check_in_at?: string
+  confidence_score?: number
+  liveness_score?: number
+  review_status: 'PENDING' | 'APPROVED' | 'REJECTED'
+  reviewed_by?: number
+  reviewed_at?: string
+  note?: string
+}
+
+interface BackendAppealItem {
+  id: number
+  attendance_record_id: number
+  student_id: number
+  reason: string
+  evidence_uri?: string
+  status: 'PENDING' | 'APPROVED' | 'REJECTED'
+  resolved_by?: number
+  resolution_note?: string
+  created_at: string
+  resolved_at?: string
+}
+
+interface BackendAuditLogItem {
+  id: number
+  actor_user_id?: number
+  action: string
+  entity_type?: string
+  entity_id?: string
+  ip_address?: string
+  user_agent?: string
+  details?: Record<string, unknown>
+  created_at: string
+}
+
+// ─── Helpers to map Backend -> Frontend ───────────────────────
 function mapBackendUserToFrontend(u: BackendUserResponse): User {
-  const role: Role = u.role === 'lecturer' ? 'teacher' : (u.role as Role)
+  const rawRole = (u.role || '').toLowerCase()
+  const role: Role = rawRole === 'lecturer' ? 'teacher' : rawRole === 'admin' ? 'admin' : 'student'
   const userId =
     u.student_profile?.student_code ||
     u.lecturer_profile?.lecturer_code ||
-    (u.role === 'admin' ? `AD${u.id.toString().padStart(4, '0')}` : `USR${u.id.toString().padStart(4, '0')}`)
+    (role === 'admin' ? `AD${u.id.toString().padStart(4, '0')}` : `USR${u.id.toString().padStart(4, '0')}`)
   const department = u.student_profile?.major || u.lecturer_profile?.department || 'Khoa Công nghệ thông tin'
 
   const initials = u.full_name
@@ -155,89 +150,17 @@ function mapBackendUserToFrontend(u: BackendUserResponse): User {
     fullName: u.full_name,
     email: u.email,
     role,
-    isActive: u.status === 'active',
+    isActive: (u.status || '').toLowerCase() === 'active',
     department,
     hasFaceRegistered: false,
     avatar: initials || 'ND',
   }
 }
 
-// Transform backend student item to frontend User
-function mapBackendStudentToFrontend(s: BackendStudentItem): User {
-  const u = s.user
-  const fullName = u?.full_name || 'Sinh viên'
-  const initials = fullName
-    .split(' ')
-    .filter(Boolean)
-    .slice(-2)
-    .map((w) => w[0])
-    .join('')
-    .toUpperCase()
+// Global cached session state in memory
+let cachedActiveSession: AttendanceSession | undefined = undefined
 
-  return {
-    id: s.user_id,
-    userId: s.student_code,
-    username: u?.username || s.student_code.toLowerCase(),
-    fullName,
-    email: u?.email || `${s.student_code.toLowerCase()}@ptit.edu.vn`,
-    role: 'student',
-    isActive: u ? u.status === 'active' : true,
-    department: s.major || 'Công nghệ thông tin',
-    hasFaceRegistered: false,
-    avatar: initials || 'SV',
-  }
-}
-
-// Transform backend lecturer item to frontend User
-function mapBackendLecturerToFrontend(l: BackendLecturerItem): User {
-  const u = l.user
-  const fullName = u?.full_name || 'Giảng viên'
-  const initials = fullName
-    .split(' ')
-    .filter(Boolean)
-    .slice(-2)
-    .map((w) => w[0])
-    .join('')
-    .toUpperCase()
-
-  return {
-    id: l.user_id,
-    userId: l.lecturer_code,
-    username: u?.username || l.lecturer_code.toLowerCase(),
-    fullName,
-    email: u?.email || `${l.lecturer_code.toLowerCase()}@ptit.edu.vn`,
-    role: 'teacher',
-    isActive: u ? u.status === 'active' : true,
-    department: l.department || 'Khoa Công nghệ thông tin',
-    hasFaceRegistered: false,
-    avatar: initials || 'GV',
-  }
-}
-
-// Audit Log helper
-export const recordAuditLog = (
-  action: string,
-  actor: string,
-  detail: string,
-  tone: 'teal' | 'amber' | 'coral' | 'blue' = 'teal'
-) => {
-  const now = new Date()
-  const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-  const newLog: AuditLog = {
-    id: Date.now(),
-    time: timeStr,
-    action,
-    actor,
-    detail,
-    tone,
-    timestamp: now.toISOString(),
-  }
-  auditLogsCache = [newLog, ...auditLogsCache]
-  setStored('auditLogs', auditLogsCache)
-  return newLog
-}
-
-// Health check service
+// ─── Health Check Service ─────────────────────────────────────
 export const healthService = {
   checkHealth: async (): Promise<boolean> => {
     try {
@@ -249,35 +172,26 @@ export const healthService = {
   },
 }
 
-// 1. Auth Service (Connects to /api/v1/auth)
+// ─── 1. Auth Service ──────────────────────────────────────────
 export const authService = {
-  getCurrentUser: (role: Role): User => {
-    const found = usersCache.find((u) => u.role === role)
-    return (
-      found || {
-        id: 99,
-        userId: 'USER001',
-        username: 'default.user',
-        fullName: 'Người dùng',
-        email: 'user@ptit.edu.vn',
-        role,
-        isActive: true,
-        avatar: 'ND',
-      }
-    )
+  getCurrentUser: (_role: Role): User => {
+    return {
+      id: 0,
+      userId: 'UNKNOWN',
+      username: '',
+      fullName: '',
+      email: '',
+      role: _role,
+      isActive: true,
+      avatar: 'ND',
+    }
   },
 
   getMe: async (): Promise<User | null> => {
-    const token = getStoredToken()
-    if (!token) return null
     try {
-      const backendUser = await httpClient.get<BackendUserResponse>('/api/v1/auth/me')
-      if (backendUser && backendUser.id) {
-        const user = mapBackendUserToFrontend(backendUser)
-        // Update user in cache
-        usersCache = [user, ...usersCache.filter((u) => u.id !== user.id)]
-        setStored('users', usersCache)
-        return user
+      const profile = await httpClient.get<BackendUserResponse>('/api/v1/auth/me')
+      if (profile && profile.id) {
+        return mapBackendUserToFrontend(profile)
       }
       return null
     } catch {
@@ -285,179 +199,46 @@ export const authService = {
     }
   },
 
-  login: async (usernameOrEmail: string, pass: string, selectedRole?: Role): Promise<User> => {
-    // If clicking fast demo login button for a role
-    if (selectedRole && !usernameOrEmail.trim()) {
-      await new Promise((r) => setTimeout(r, 200))
-      const user = usersCache.find((u) => u.role === selectedRole) || authService.getCurrentUser(selectedRole)
-      recordAuditLog('Đăng nhập nhanh (Demo)', `${user.fullName} · ${user.role}`, 'Đăng nhập demo thành công', 'teal')
-      return user
-    }
+  login: async (usernameOrEmail: string, pass: string, _selectedRole?: Role): Promise<User> => {
+    const formData = new URLSearchParams()
+    formData.append('username', usernameOrEmail.trim())
+    formData.append('password', pass)
 
-    // 1. Try real backend API authentication
-    try {
-      const formData = new URLSearchParams()
-      formData.append('username', usernameOrEmail.trim())
-      formData.append('password', pass)
-
-      const tokenRes = await httpClient.post<{ access_token: string; token_type: string }>(
-        '/api/v1/auth/login',
-        formData.toString(),
-        {
-          skipAuth: true,
-          isFormUrlEncoded: true,
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-        }
-      )
-
-      if (tokenRes && tokenRes.access_token) {
-        setStoredToken(tokenRes.access_token)
-
-        // Fetch full profile of authenticated user
-        const profile = await httpClient.get<BackendUserResponse>('/api/v1/auth/me')
-        const user = mapBackendUserToFrontend(profile)
-
-        // Sync with cache & localStorage
-        usersCache = [user, ...usersCache.filter((u) => u.id !== user.id && u.userId !== user.userId)]
-        setStored('users', usersCache)
-
-        recordAuditLog(
-          'Đăng nhập hệ thống (API)',
-          `${user.fullName} · ${user.role}`,
-          'Đăng nhập Backend thành công qua JWT',
-          'teal'
-        )
-        return user
+    const tokenRes = await httpClient.post<{ access_token: string; token_type: string }>(
+      '/api/v1/auth/login',
+      formData.toString(),
+      {
+        skipAuth: true,
+        isFormUrlEncoded: true,
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
       }
-    } catch (apiError: any) {
-      if (apiError.status === 401 || apiError.status === 400 || apiError.status === 403) {
-        throw new Error(apiError.message || 'Sai tên đăng nhập hoặc mật khẩu!')
-      }
-      console.warn('Backend login error or offline, checking local accounts:', apiError.message)
-    }
-
-    // Fallback for fast demo login if backend is offline
-    await new Promise((r) => setTimeout(r, 300))
-    const normalised = usernameOrEmail.toLowerCase().trim()
-    let user = usersCache.find(
-      (u) =>
-        u.username.toLowerCase() === normalised ||
-        u.email.toLowerCase() === normalised ||
-        u.userId.toLowerCase() === normalised
     )
-    if (!user && selectedRole) {
-      user = usersCache.find((u) => u.role === selectedRole)
+
+    if (!tokenRes || !tokenRes.access_token) {
+      throw new Error('Đăng nhập không thành công: Không nhận được token')
     }
-    if (!user) {
-      throw new Error('Sai tên đăng nhập hoặc mật khẩu!')
-    }
-    if (!user.isActive) {
-      throw new Error('Tài khoản của bạn đã bị khóa bởi Quản trị viên!')
-    }
-    recordAuditLog('Đăng nhập hệ thống', `${user.fullName} · ${user.role}`, 'Đăng nhập thành công', 'teal')
-    return user
+
+    setStoredToken(tokenRes.access_token)
+
+    const profile = await httpClient.get<BackendUserResponse>('/api/v1/auth/me')
+    return mapBackendUserToFrontend(profile)
   },
 
   register: async (data: RegisterFormData): Promise<User> => {
-    // Try Backend API registration first
-    try {
-      const isStudent = data.role === 'student'
-      if (isStudent) {
-        const payload = {
-          username: data.email.split('@')[0],
-          email: data.email,
-          password: data.password,
-          full_name: data.fullName,
-          student: {
-            student_code: data.userId,
-            major: data.department || 'Công nghệ thông tin',
-            administrative_class: 'K18',
-          },
-        }
-        const res = await httpClient.post<BackendStudentItem>('/api/v1/students/', payload, { skipAuth: true })
-        if (res && res.student_code) {
-          const newUser = mapBackendStudentToFrontend(res)
-          usersCache = [newUser, ...usersCache.filter((u) => u.userId !== newUser.userId)]
-          setStored('users', usersCache)
-          recordAuditLog(
-            'Đăng ký tài khoản mới (API)',
-            `${newUser.fullName} (${newUser.userId})`,
-            'Đã tạo tài khoản Sinh viên vào Database',
-            'teal'
-          )
-          return newUser
-        }
-      } else {
-        const payload = {
-          username: data.email.split('@')[0],
-          email: data.email,
-          password: data.password,
-          full_name: data.fullName,
-          lecturer: {
-            lecturer_code: data.userId,
-            department: data.department || 'Khoa Công nghệ thông tin',
-            academic_title: 'Thạc sĩ',
-          },
-        }
-        const res = await httpClient.post<BackendLecturerItem>('/api/v1/lecturers/', payload, { skipAuth: true })
-        if (res && res.lecturer_code) {
-          const newUser = mapBackendLecturerToFrontend(res)
-          usersCache = [newUser, ...usersCache.filter((u) => u.userId !== newUser.userId)]
-          setStored('users', usersCache)
-          recordAuditLog(
-            'Đăng ký tài khoản mới (API)',
-            `${newUser.fullName} (${newUser.userId})`,
-            'Đã tạo tài khoản Giảng viên vào Database',
-            'teal'
-          )
-          return newUser
-        }
-      }
-    } catch (apiError: any) {
-      if (apiError.status === 409 || apiError.status === 422 || apiError.status === 400) {
-        throw new Error(apiError.message || 'Mã tài khoản hoặc email đã tồn tại!')
-      }
-      console.warn('Backend register error or offline, fallback to local storage:', apiError.message)
-    }
-
-    // Local fallback
-    await new Promise((r) => setTimeout(r, 400))
-    const duplicate = usersCache.find(
-      (u) =>
-        u.email.toLowerCase() === data.email.toLowerCase() ||
-        u.userId.toLowerCase() === data.userId.toLowerCase()
+    return adminUserService.createUser(
+      {
+        userId: data.userId,
+        username: data.email.split('@')[0],
+        fullName: data.fullName,
+        email: data.email,
+        role: data.role,
+        isActive: true,
+        department: data.department,
+      },
+      data.password
     )
-    if (duplicate) {
-      if (duplicate.email.toLowerCase() === data.email.toLowerCase()) {
-        throw new Error('Email này đã được sử dụng!')
-      }
-      throw new Error('MSSV/Mã GV đã tồn tại trong hệ thống!')
-    }
-
-    const prefix = data.role === 'student' ? 'SV' : 'GV'
-    const newUser: User = {
-      id: Date.now(),
-      userId: data.userId || `${prefix}${Date.now().toString().slice(-6)}`,
-      username: data.email.split('@')[0],
-      fullName: data.fullName,
-      email: data.email,
-      role: data.role,
-      isActive: true,
-      department: data.department || 'CNTT',
-      hasFaceRegistered: false,
-    }
-
-    usersCache = [newUser, ...usersCache]
-    setStored('users', usersCache)
-    recordAuditLog(
-      'Đăng ký tài khoản mới',
-      `${newUser.fullName} (${newUser.userId})`,
-      `Tài khoản ${newUser.role === 'student' ? 'Sinh viên' : 'Giảng viên'} được tạo thành công`,
-      'teal'
-    )
-    return newUser
   },
 
   logout: async (): Promise<void> => {
@@ -467,378 +248,241 @@ export const authService = {
       console.warn('Logout API error:', e)
     } finally {
       removeStoredToken()
+      cachedActiveSession = undefined
     }
   },
 }
 
-// 2. User Management Service (Connects to /api/v1/students & /api/v1/lecturers)
+// ─── 2. User Management Service ───────────────────────────────
 export const userService = {
   getUsers: async (): Promise<User[]> => {
-    try {
-      const [studentsRes, lecturersRes] = await Promise.allSettled([
-        httpClient.get<BackendStudentItem[]>('/api/v1/students?skip=0&limit=100'),
-        httpClient.get<BackendLecturerItem[]>('/api/v1/lecturers?skip=0&limit=100'),
-      ])
-
-      const fetchedUsers: User[] = []
-
-      if (studentsRes.status === 'fulfilled' && Array.isArray(studentsRes.value)) {
-        for (const s of studentsRes.value) {
-          fetchedUsers.push(mapBackendStudentToFrontend(s))
-        }
-      }
-
-      if (lecturersRes.status === 'fulfilled' && Array.isArray(lecturersRes.value)) {
-        for (const l of lecturersRes.value) {
-          fetchedUsers.push(mapBackendLecturerToFrontend(l))
-        }
-      }
-
-      // Add admin if not present
-      const adminExists = fetchedUsers.some((u) => u.role === 'admin')
-      if (!adminExists) {
-        const localAdmin = usersCache.find((u) => u.role === 'admin')
-        if (localAdmin) fetchedUsers.push(localAdmin)
-      }
-
-      if (fetchedUsers.length > 0) {
-        usersCache = fetchedUsers
-        setStored('users', usersCache)
-        return fetchedUsers
-      }
-    } catch (err) {
-      console.warn('Failed to load users from backend, fallback to cache:', err)
-    }
-
-    return [...usersCache]
+    return adminUserService.getUsers()
   },
-
   toggleUserStatus: async (userId: string): Promise<boolean> => {
-    const target = usersCache.find((u) => u.userId === userId)
-    if (target && target.role === 'student') {
-      try {
-        await httpClient.patch(`/api/v1/students/${target.id}/lock`)
-      } catch (e) {
-        console.warn('API lock student error:', e)
-      }
-    }
-
-    let newStatus = true
-    usersCache = usersCache.map((u) => {
-      if (u.userId === userId) {
-        newStatus = !u.isActive
-        return { ...u, isActive: newStatus }
-      }
-      return u
-    })
-    setStored('users', usersCache)
-    recordAuditLog(
-      newStatus ? 'Mở khóa tài khoản' : 'Khóa tài khoản',
-      'Quản trị viên',
-      `Tài khoản ${userId} chuyển sang ${newStatus ? 'Hoạt động' : 'Bị khóa'}`,
-      newStatus ? 'teal' : 'amber'
-    )
-    return newStatus
+    const all = await adminUserService.getUsers()
+    const found = all.find((u) => u.userId === userId || String(u.id) === userId)
+    if (!found) throw new Error('Không tìm thấy người dùng')
+    const updated = await adminUserService.setUserActive(found, !found.isActive)
+    return updated.isActive
   },
-
   updateUserRole: async (userId: string, newRole: Role): Promise<void> => {
-    usersCache = usersCache.map((u) => (u.userId === userId ? { ...u, role: newRole } : u))
-    setStored('users', usersCache)
-    recordAuditLog('Cập nhật vai trò RBAC', 'Quản trị viên', `Gán quyền ${newRole} cho người dùng ${userId}`, 'blue')
+    const all = await adminUserService.getUsers()
+    const found = all.find((u) => u.userId === userId || String(u.id) === userId)
+    if (!found) throw new Error('Không tìm thấy người dùng')
+    await adminUserService.updateUser(found, { role: newRole })
   },
-
   createUser: async (data: Omit<User, 'id'>): Promise<User> => {
-    try {
-      if (data.role === 'student') {
-        const payload = {
-          username: data.username || data.userId.toLowerCase(),
-          email: data.email,
-          password: 'Password123!',
-          full_name: data.fullName,
-          student: {
-            student_code: data.userId,
-            major: data.department || 'Công nghệ thông tin',
-            administrative_class: 'K18',
-          },
-        }
-        const res = await httpClient.post<BackendStudentItem>('/api/v1/students/', payload)
-        if (res && res.student_code) {
-          const newUser = mapBackendStudentToFrontend(res)
-          usersCache = [newUser, ...usersCache]
-          setStored('users', usersCache)
-          recordAuditLog('Thêm người dùng mới (API)', 'Quản trị viên', `Tạo tài khoản ${newUser.fullName} (${newUser.userId})`, 'teal')
-          return newUser
-        }
-      } else if (data.role === 'teacher') {
-        const payload = {
-          username: data.username || data.userId.toLowerCase(),
-          email: data.email,
-          password: 'Password123!',
-          full_name: data.fullName,
-          lecturer: {
-            lecturer_code: data.userId,
-            department: data.department || 'Khoa Công nghệ thông tin',
-            academic_title: 'Thạc sĩ',
-          },
-        }
-        const res = await httpClient.post<BackendLecturerItem>('/api/v1/lecturers/', payload)
-        if (res && res.lecturer_code) {
-          const newUser = mapBackendLecturerToFrontend(res)
-          usersCache = [newUser, ...usersCache]
-          setStored('users', usersCache)
-          recordAuditLog('Thêm người dùng mới (API)', 'Quản trị viên', `Tạo tài khoản ${newUser.fullName} (${newUser.userId})`, 'teal')
-          return newUser
-        }
-      }
-    } catch (e: any) {
-      console.warn('API createUser error, using local storage fallback:', e.message)
-    }
-
-    const newUser: User = {
-      ...data,
-      id: Date.now(),
-    }
-    usersCache = [newUser, ...usersCache]
-    setStored('users', usersCache)
-    recordAuditLog('Thêm người dùng mới', 'Quản trị viên', `Tạo tài khoản ${newUser.fullName} (${newUser.userId})`, 'teal')
-    return newUser
+    return adminUserService.createUser(data, 'Password123!')
   },
-
   deleteUser: async (userId: string): Promise<void> => {
-    const target = usersCache.find((u) => u.userId === userId)
-    if (target) {
-      try {
-        if (target.role === 'student') {
-          await httpClient.delete(`/api/v1/students/${target.id}`)
-        } else if (target.role === 'teacher') {
-          await httpClient.delete(`/api/v1/lecturers/${target.id}`)
-        }
-      } catch (e) {
-        console.warn('API deleteUser error:', e)
-      }
+    const all = await adminUserService.getUsers()
+    const found = all.find((u) => u.userId === userId || String(u.id) === userId)
+    if (found) {
+      await adminUserService.setUserActive(found, false)
     }
-
-    usersCache = usersCache.filter((u) => u.userId !== userId)
-    setStored('users', usersCache)
-    recordAuditLog('Xóa tài khoản', 'Quản trị viên', `Đã xóa tài khoản ${userId}`, 'coral')
   },
-
   updateUser: async (userId: string, data: Partial<User>): Promise<User> => {
-    const target = usersCache.find((u) => u.userId === userId)
-    if (target) {
-      try {
-        if (target.role === 'student') {
-          await httpClient.patch(`/api/v1/students/${target.id}`, {
-            student_code: target.userId,
-            major: data.department || target.department,
-          })
-        } else if (target.role === 'teacher') {
-          await httpClient.patch(`/api/v1/lecturers/${target.id}`, {
-            lecturer_code: target.userId,
-            department: data.department || target.department,
-          })
-        }
-      } catch (e) {
-        console.warn('API updateUser error:', e)
-      }
-    }
-
-    let updatedUser: User | null = null
-    usersCache = usersCache.map((u) => {
-      if (u.userId === userId) {
-        updatedUser = { ...u, ...data }
-        return updatedUser
-      }
-      return u
-    })
-    setStored('users', usersCache)
-    recordAuditLog('Cập nhật thông tin người dùng', 'Quản trị viên', `Cập nhật tài khoản ${userId}`, 'teal')
-    if (!updatedUser) throw new Error('Không tìm thấy người dùng!')
-    return updatedUser
+    const all = await adminUserService.getUsers()
+    const found = all.find((u) => u.userId === userId || String(u.id) === userId)
+    if (!found) throw new Error('Không tìm thấy người dùng')
+    return adminUserService.updateUser(found, data)
   },
 }
 
-// 3. Class & Academic Service (Connects to /api/v1/academic)
+// ─── 3. Class & Academic Service ──────────────────────────────
 export const classService = {
   getClasses: async (): Promise<ClassItem[]> => {
     try {
-      const [coursesRes, semestersRes] = await Promise.allSettled([
-        httpClient.get<BackendCourseItem[]>('/api/v1/academic/courses'),
-        httpClient.get<{ id: number; code: string; name: string }[]>('/api/v1/academic/semesters'),
+      const [courses, sections, users] = await Promise.all([
+        httpClient.get<BackendCourseItem[]>('/api/v1/academic/courses').catch(() => []),
+        httpClient.get<BackendSectionItem[]>('/api/v1/academic/sections').catch(() => []),
+        adminUserService.getUsers().catch(() => []),
       ])
 
-      if (coursesRes.status === 'fulfilled' && Array.isArray(coursesRes.value) && coursesRes.value.length > 0) {
-        const courses = coursesRes.value
-        const semesters = semestersRes.status === 'fulfilled' ? semestersRes.value : []
+      if (!Array.isArray(sections) || sections.length === 0) {
+        return []
+      }
 
-        // If semesters exist, query sections for the active semester
-        let sections: BackendSectionItem[] = []
-        if (semesters.length > 0) {
-          try {
-            const secRes = await httpClient.get<BackendSectionItem[]>(
-              `/api/v1/academic/sections?semester_id=${semesters[0].id}`
-            )
-            if (Array.isArray(secRes)) sections = secRes
-          } catch {
-            // ignore section load error
-          }
-        }
+      const teachers = users.filter((u) => u.role === 'teacher')
+      const mappedClasses: ClassItem[] = []
 
-        if (sections.length > 0) {
-          const mappedClasses: ClassItem[] = []
-          for (const sec of sections) {
-            const c = courses.find((crs) => crs.id === sec.course_id)
-            let enrolledStudentIds: string[] = []
-            try {
-              const enrollments = await httpClient.get<BackendEnrollmentItem[]>(
-                `/api/v1/academic/sections/${sec.id}/enrollments`
-              )
-              if (Array.isArray(enrollments)) {
-                enrolledStudentIds = enrollments.map((e) => `SV${e.student_id}`)
-              }
-            } catch {
-              // ignore enrollment error
-            }
+      for (const sec of sections) {
+        const c = Array.isArray(courses) ? courses.find((crs) => crs.id === sec.course_id) : undefined
+        const lecturer = teachers.find((t) => t.id === sec.lecturer_id)
 
-            mappedClasses.push({
-              id: sec.id,
-              classId: sec.section_code || (c ? c.course_code : `SEC${sec.id}`),
-              className: c ? c.course_name : `Học phần ${sec.section_code}`,
-              teacherId: sec.lecturer_id || 2,
-              teacherName: 'Nguyễn Thị Lan',
-              room: sec.room || 'Phòng A-301',
-              schedule: 'Thứ 2 · 08:00 - 10:00',
-              department: 'Khoa Công nghệ thông tin',
-              studentCount: enrolledStudentIds.length,
-              maxStudents: 45,
-              studentIds: enrolledStudentIds,
+        let enrolledStudentIds: string[] = []
+        try {
+          const enrollments = await httpClient.get<BackendEnrollmentItem[]>(
+            `/api/v1/academic/sections/${sec.id}/enrollments`
+          )
+          if (Array.isArray(enrollments)) {
+            enrolledStudentIds = enrollments.map((e) => {
+              const matchedStudent = users.find((u) => u.id === e.student_id)
+              return matchedStudent ? matchedStudent.userId : `SV${e.student_id}`
             })
           }
-
-          if (mappedClasses.length > 0) {
-            classesCache = mappedClasses
-            setStored('classes', classesCache)
-            return mappedClasses
-          }
+        } catch {
+          // ignore enrollment fetch errors
         }
-      }
-    } catch (err) {
-      console.warn('API getClasses error, fallback to local storage:', err)
-    }
 
-    return [...classesCache]
+        mappedClasses.push({
+          id: sec.id,
+          classId: sec.section_code || (c ? c.course_code : `SEC${sec.id}`),
+          className: c ? c.course_name : `Học phần ${sec.section_code}`,
+          teacherId: sec.lecturer_id || 0,
+          teacherName: lecturer ? lecturer.fullName : 'Giảng viên',
+          room: sec.room || 'Phòng A-301',
+          schedule: 'Thứ 2 · 08:00 - 10:00',
+          department: lecturer?.department || 'Khoa Công nghệ thông tin',
+          studentCount: enrolledStudentIds.length,
+          maxStudents: 45,
+          studentIds: enrolledStudentIds,
+        })
+      }
+
+      return mappedClasses
+    } catch (err) {
+      console.error('API getClasses error:', err)
+      return []
+    }
   },
 
   createClass: async (data: Omit<ClassItem, 'id' | 'studentCount' | 'studentIds'>): Promise<ClassItem> => {
-    try {
-      // 1. Create Course in Backend
-      const course = await httpClient.post<BackendCourseItem>('/api/v1/academic/courses', {
+    // 1. Get or create Course
+    const courses = await httpClient.get<BackendCourseItem[]>('/api/v1/academic/courses').catch(() => [])
+    let course = courses.find((c) => c.course_code === data.classId)
+    if (!course) {
+      course = await httpClient.post<BackendCourseItem>('/api/v1/academic/courses', {
         course_code: data.classId,
         course_name: data.className,
         credits: 3,
       })
-
-      // 2. Fetch or ensure Semester exists
-      let semesters = await httpClient.get<{ id: number }[]>('/api/v1/academic/semesters')
-      if (!Array.isArray(semesters) || semesters.length === 0) {
-        const newSem = await httpClient.post<{ id: number }>('/api/v1/academic/semesters', {
-          code: 'FA26',
-          name: 'Fall 2026',
-          start_date: '2026-09-01',
-          end_date: '2026-12-31',
-        })
-        semesters = [newSem]
-      }
-
-      // 3. Create ClassSection
-      if (course && course.id && semesters[0]) {
-        await httpClient.post<BackendSectionItem>('/api/v1/academic/sections', {
-          section_code: data.classId,
-          course_id: course.id,
-          semester_id: semesters[0].id,
-          lecturer_id: data.teacherId || 1,
-          room: data.room || 'Phòng A-301',
-        })
-      }
-    } catch (e: any) {
-      console.warn('API createClass error, persisting locally:', e.message)
     }
 
-    const newClass: ClassItem = {
-      ...data,
-      id: Date.now(),
+    // 2. Get active semester
+    let semesters = await httpClient.get<BackendSemesterItem[]>('/api/v1/academic/semesters').catch(() => [])
+    let activeSem = semesters.find((s) => s.status === 'ACTIVE' || s.status === 'active') || semesters[0]
+    if (!activeSem) {
+      activeSem = await httpClient.post<BackendSemesterItem>('/api/v1/academic/semesters', {
+        code: 'FA26',
+        name: 'Học kỳ 1 (2026-2027)',
+        start_date: '2026-09-01',
+        end_date: '2026-12-31',
+      })
+    }
+
+    // 3. Create ClassSection
+    const createdSection = await httpClient.post<BackendSectionItem>('/api/v1/academic/sections', {
+      section_code: data.classId,
+      course_id: course.id,
+      semester_id: activeSem.id,
+      lecturer_id: data.teacherId || 1,
+      room: data.room || 'Phòng A-301',
+    })
+
+    return {
+      id: createdSection.id,
+      classId: createdSection.section_code,
+      className: data.className,
+      teacherId: createdSection.lecturer_id,
+      teacherName: data.teacherName,
+      room: createdSection.room || data.room,
+      schedule: data.schedule,
+      department: data.department,
       studentCount: 0,
+      maxStudents: data.maxStudents,
       studentIds: [],
     }
-    classesCache = [newClass, ...classesCache]
-    setStored('classes', classesCache)
-    recordAuditLog('Tạo lớp học mới', 'Giảng viên', `Tạo lớp ${newClass.className} (${newClass.classId})`, 'teal')
-    return newClass
   },
 
   addStudentToClass: async (classId: string, studentId: string): Promise<void> => {
-    const target = classesCache.find((c) => c.classId === classId)
-    if (target) {
-      try {
-        const studentNumId = parseInt(studentId.replace(/\D/g, '')) || 1
-        await httpClient.post(`/api/v1/academic/sections/${target.id}/enrollments`, {
-          student_id: studentNumId,
-          section_id: target.id,
-        })
-      } catch (e) {
-        console.warn('API enroll student error:', e)
-      }
-    }
+    const classes = await classService.getClasses()
+    const target = classes.find((c) => c.classId === classId)
+    if (!target) throw new Error('Không tìm thấy lớp học')
 
-    classesCache = classesCache.map((cls) => {
-      if (cls.classId === classId && !cls.studentIds.includes(studentId)) {
-        return {
-          ...cls,
-          studentIds: [...cls.studentIds, studentId],
-          studentCount: cls.studentCount + 1,
-        }
-      }
-      return cls
+    const users = await adminUserService.getUsers()
+    const matchedStudent = users.find((u) => u.userId === studentId || String(u.id) === studentId)
+    const studentNumericId = matchedStudent ? matchedStudent.id : parseInt(studentId.replace(/\D/g, '')) || 1
+
+    await httpClient.post(`/api/v1/academic/sections/${target.id}/enrollments`, {
+      student_id: studentNumericId,
+      section_id: target.id,
     })
-    setStored('classes', classesCache)
   },
 
   removeStudentFromClass: async (classId: string, studentId: string): Promise<void> => {
-    const target = classesCache.find((c) => c.classId === classId)
-    if (target) {
-      try {
-        const studentNumId = parseInt(studentId.replace(/\D/g, '')) || 1
-        await httpClient.delete(`/api/v1/academic/sections/${target.id}/enrollments/${studentNumId}`)
-      } catch (e) {
-        console.warn('API unenroll student error:', e)
-      }
-    }
+    const classes = await classService.getClasses()
+    const target = classes.find((c) => c.classId === classId)
+    if (!target) throw new Error('Không tìm thấy lớp học')
 
-    classesCache = classesCache.map((cls) => {
-      if (cls.classId === classId) {
-        return {
-          ...cls,
-          studentIds: cls.studentIds.filter((id) => id !== studentId),
-          studentCount: Math.max(0, cls.studentCount - 1),
-        }
-      }
-      return cls
-    })
-    setStored('classes', classesCache)
+    const users = await adminUserService.getUsers()
+    const matchedStudent = users.find((u) => u.userId === studentId || String(u.id) === studentId)
+    const studentNumericId = matchedStudent ? matchedStudent.id : parseInt(studentId.replace(/\D/g, '')) || 1
+
+    await httpClient.delete(`/api/v1/academic/sections/${target.id}/enrollments/${studentNumericId}`)
   },
 }
 
-// 4. Session & Attendance Service (TEA_02, TEA_03)
+// ─── 4. Session & Attendance Service ──────────────────────────
 export const sessionService = {
   getSessions: async (): Promise<AttendanceSession[]> => {
-    return [...sessionsCache]
+    try {
+      const [sessionsRes, classesRes, usersRes] = await Promise.all([
+        httpClient.get<BackendSessionItem[]>('/api/v1/sessions').catch(() => []),
+        classService.getClasses().catch(() => []),
+        adminUserService.getUsers().catch(() => []),
+      ])
+
+      if (!Array.isArray(sessionsRes)) return []
+
+      const mapped = sessionsRes.map((s) => {
+        const cls = classesRes.find((c) => c.id === s.section_id)
+        const creator = usersRes.find((u) => u.id === s.created_by)
+        const formatTime = (iso: string) => {
+          if (!iso) return ''
+          const d = new Date(iso)
+          return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+        }
+
+        const isSessionActive = s.status === 'OPEN'
+        const item: AttendanceSession = {
+          id: s.id,
+          sessionId: `SES-${cls?.classId || s.section_id}-${s.session_no}`,
+          classId: cls?.classId || `SEC${s.section_id}`,
+          className: cls?.className || `Học phần ${s.section_id}`,
+          room: cls?.room || 'Phòng A-301',
+          startTime: formatTime(s.scheduled_start_at) || '08:00',
+          endTime: formatTime(s.scheduled_end_at) || '10:00',
+          lateAfter: formatTime(s.late_after_at) || '08:15',
+          status: isSessionActive ? 'active' : 'closed',
+          createdBy: s.created_by,
+          createdByName: creator?.fullName || 'Giảng viên',
+          createdAt: s.scheduled_start_at || new Date().toISOString(),
+          totalEnrolled: cls?.studentCount || 0,
+          presentCount: 0,
+          lateCount: 0,
+          absentCount: cls?.studentCount || 0,
+        }
+        if (isSessionActive) {
+          cachedActiveSession = item
+        }
+        return item
+      })
+
+      return mapped
+    } catch {
+      return []
+    }
   },
+
   getActiveSession: (): AttendanceSession | undefined => {
-    return sessionsCache.find((s) => s.status === 'active')
+    return cachedActiveSession
   },
+
   hasActiveSessionForClass: (classId: string): boolean => {
-    return sessionsCache.some((s) => s.classId === classId && s.status === 'active')
+    return Boolean(cachedActiveSession && cachedActiveSession.classId === classId && cachedActiveSession.status === 'active')
   },
+
   createSession: async (data: {
     classId: string
     className: string
@@ -849,15 +493,40 @@ export const sessionService = {
     teacherId: number
     teacherName: string
   }): Promise<AttendanceSession> => {
-    const existingActive = sessionsCache.find((s) => s.classId === data.classId && s.status === 'active')
-    if (existingActive) {
-      throw new Error(`Lớp ${data.className} đang có phiên điểm danh đang mở! Vui lòng đóng phiên trước.`)
-    }
+    const classes = await classService.getClasses()
+    const targetClass = classes.find((c) => c.classId === data.classId)
+    if (!targetClass) throw new Error('Không tìm thấy lớp học')
 
-    const targetClass = classesCache.find((c) => c.classId === data.classId)
-    const newSession: AttendanceSession = {
-      id: Date.now(),
-      sessionId: `SES-${data.classId}-${Date.now().toString().slice(-4)}`,
+    const todayStr = new Date().toISOString().slice(0, 10)
+    const scheduledStart = `${todayStr}T${data.startTime || '08:00'}:00`
+    const scheduledEnd = `${todayStr}T${data.endTime || '10:00'}:00`
+    const lateAfter = `${todayStr}T${data.lateAfter || '08:15'}:00`
+
+    // Count existing sessions in section to generate session_no
+    const existing = await httpClient.get<BackendSessionItem[]>(
+      `/api/v1/sections/${targetClass.id}/sessions`
+    ).catch(() => [])
+    const nextSessionNo = (existing.length || 0) + 1
+
+    const created = await httpClient.post<BackendSessionItem>(
+      `/api/v1/sections/${targetClass.id}/sessions`,
+      {
+        session_no: nextSessionNo,
+        title: `Buổi ${nextSessionNo} - ${data.className}`,
+        scheduled_start_at: scheduledStart,
+        scheduled_end_at: scheduledEnd,
+        late_after_at: lateAfter,
+      }
+    )
+
+    // Open session
+    const opened = await httpClient.post<BackendSessionItem>(
+      `/api/v1/sessions/${created.id}/open`
+    )
+
+    const sessionObj: AttendanceSession = {
+      id: opened.id,
+      sessionId: `SES-${data.classId}-${opened.session_no}`,
       classId: data.classId,
       className: data.className,
       room: data.room,
@@ -867,80 +536,208 @@ export const sessionService = {
       status: 'active',
       createdBy: data.teacherId,
       createdByName: data.teacherName,
-      createdAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
-      totalEnrolled: targetClass ? targetClass.studentCount : 42,
+      createdAt: new Date().toISOString(),
+      totalEnrolled: targetClass.studentCount,
       presentCount: 0,
       lateCount: 0,
-      absentCount: targetClass ? targetClass.studentCount : 42,
+      absentCount: targetClass.studentCount,
     }
-    sessionsCache = [newSession, ...sessionsCache]
-    setStored('sessions', sessionsCache)
-    recordAuditLog(
-      'Mở phiên điểm danh',
-      data.teacherName,
-      `Khởi tạo phiên ${newSession.sessionId} cho lớp ${data.className}`,
-      'teal'
-    )
-    return newSession
+
+    cachedActiveSession = sessionObj
+    return sessionObj
   },
+
   closeSession: async (sessionId: string): Promise<void> => {
-    sessionsCache = sessionsCache.map((s) => (s.sessionId === sessionId ? { ...s, status: 'closed' } : s))
-    setStored('sessions', sessionsCache)
-    recordAuditLog('Đóng phiên điểm danh', 'Giảng viên', `Đã kết thúc phiên ${sessionId}`, 'amber')
+    const numId = parseInt(sessionId.replace(/\D/g, '')) || cachedActiveSession?.id
+    if (numId) {
+      await httpClient.post(`/api/v1/sessions/${numId}/close`).catch(() => {})
+    }
+    if (cachedActiveSession) {
+      cachedActiveSession.status = 'closed'
+    }
+    cachedActiveSession = undefined
   },
 }
 
-// 5. Attendance Log & AI Review Service (FR-07..FR-10)
+// ─── 5. Attendance Log & Review Service ───────────────────────
 export const attendanceService = {
   getLogs: async (sessionId?: string): Promise<AttendanceLog[]> => {
-    if (sessionId) {
-      return attendanceLogsCache.filter((log) => log.sessionId === sessionId)
+    try {
+      const numSessionId = sessionId ? parseInt(sessionId.replace(/\D/g, '')) || undefined : undefined
+      const endpoint = numSessionId ? `/api/v1/attendance?session_id=${numSessionId}` : '/api/v1/attendance'
+      const [records, users, classes] = await Promise.all([
+        httpClient.get<BackendAttendanceItem[]>(endpoint).catch(() => []),
+        adminUserService.getUsers().catch(() => []),
+        classService.getClasses().catch(() => []),
+      ])
+
+      if (!Array.isArray(records)) return []
+
+      return records.map((r) => {
+        const student = users.find((u) => u.id === r.student_id)
+        const formatTime = (iso?: string) => {
+          if (!iso) return 'Chưa ghi nhận'
+          const d = new Date(iso)
+          return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+        }
+
+        const statusMap: Record<string, 'present' | 'late' | 'absent'> = {
+          PRESENT: 'present',
+          LATE: 'late',
+          ABSENT: 'absent',
+          EXCUSED: 'present',
+        }
+        const reviewMap: Record<string, 'pending' | 'approved' | 'rejected'> = {
+          PENDING: 'pending',
+          APPROVED: 'approved',
+          REJECTED: 'rejected',
+        }
+
+        return {
+          id: r.id,
+          sessionId: `SES-${r.session_id}`,
+          classId: classes[0]?.classId || 'IT308',
+          studentId: student ? student.userId : `SV${r.student_id}`,
+          studentName: student ? student.fullName : `Sinh viên #${r.student_id}`,
+          checkInTime: formatTime(r.check_in_at),
+          confidenceScore: r.confidence_score ? Number(r.confidence_score) : 95.0,
+          status: statusMap[r.status] || 'present',
+          reviewStatus: reviewMap[r.review_status] || 'approved',
+          method: r.verification_method === 'FACE' ? 'Khuôn mặt' : 'Thủ công',
+          createdAt: r.check_in_at || new Date().toISOString(),
+        }
+      })
+    } catch {
+      return []
     }
-    return [...attendanceLogsCache]
   },
-  getStudentLogs: async (studentId: string): Promise<AttendanceLog[]> => {
-    return attendanceLogsCache.filter((log) => log.studentId === studentId)
+
+  getStudentLogs: async (_studentId: string): Promise<AttendanceLog[]> => {
+    try {
+      const records = await httpClient.get<BackendAttendanceItem[]>('/api/v1/students/me/attendance').catch(() => [])
+      if (!Array.isArray(records)) return []
+      return records.map((r) => ({
+        id: r.id,
+        sessionId: `SES-${r.session_id}`,
+        classId: 'IT308',
+        studentId: _studentId,
+        studentName: 'Sinh viên',
+        checkInTime: r.check_in_at ? r.check_in_at.slice(11, 19) : '08:00:00',
+        confidenceScore: r.confidence_score ? Number(r.confidence_score) : 95.0,
+        status: (r.status.toLowerCase() as 'present' | 'late' | 'absent') || 'present',
+        reviewStatus: (r.review_status.toLowerCase() as 'pending' | 'approved' | 'rejected') || 'approved',
+        method: r.verification_method === 'FACE' ? 'Khuôn mặt' : 'Thủ công',
+        createdAt: r.check_in_at || new Date().toISOString(),
+      }))
+    } catch {
+      return []
+    }
   },
+
   approveLog: async (logId: number): Promise<void> => {
-    attendanceLogsCache = attendanceLogsCache.map((log) =>
-      log.id === logId ? { ...log, reviewStatus: 'approved' as const } : log
-    )
-    setStored('attendanceLogs', attendanceLogsCache)
-    recordAuditLog('Phê duyệt nhận diện AI', 'Giảng viên', `Duyệt kết quả điểm danh mã #${logId}`, 'teal')
+    await httpClient.post(`/api/v1/attendance/${logId}/approve`, {
+      note: 'Phê duyệt qua hệ thống quản lý',
+    })
   },
+
   rejectLog: async (logId: number): Promise<void> => {
-    attendanceLogsCache = attendanceLogsCache.map((log) =>
-      log.id === logId ? { ...log, reviewStatus: 'rejected' as const, status: 'absent' as const } : log
-    )
-    setStored('attendanceLogs', attendanceLogsCache)
-    recordAuditLog('Từ chối nhận diện AI', 'Giảng viên', `Từ chối kết quả điểm danh mã #${logId}`, 'coral')
+    await httpClient.post(`/api/v1/attendance/${logId}/reject`, {
+      note: 'Từ chối điểm danh',
+    })
   },
+
   addRealtimeRecognition: (log: Omit<AttendanceLog, 'id' | 'createdAt'>): AttendanceLog => {
-    const existing = attendanceLogsCache.find(
-      (l) => l.sessionId === log.sessionId && l.studentId === log.studentId && l.reviewStatus !== 'rejected'
-    )
-    if (existing) {
-      return existing
-    }
-    const newLog: AttendanceLog = {
+    // If during live session, we can record via manual check-in API
+    const numSessionId = parseInt(log.sessionId.replace(/\D/g, '')) || 1
+    const numStudentId = parseInt(log.studentId.replace(/\D/g, '')) || 1
+
+    httpClient.post(`/api/v1/sessions/${numSessionId}/attendance`, {
+      student_id: numStudentId,
+      note: 'Realtime check-in',
+    }).catch(() => {})
+
+    return {
       ...log,
       id: Date.now(),
       createdAt: new Date().toISOString(),
     }
-    attendanceLogsCache = [newLog, ...attendanceLogsCache]
-    setStored('attendanceLogs', attendanceLogsCache)
-    return newLog
   },
 }
 
-// 6. Complaint Service (STU_04, TEA_05)
+// ─── 6. Complaint / Appeals Service ───────────────────────────
 export const complaintService = {
   getComplaints: async (): Promise<ComplaintRequest[]> => {
-    return [...complaintsCache]
+    try {
+      const [appeals, users, classes] = await Promise.all([
+        httpClient.get<BackendAppealItem[]>('/api/v1/appeals').catch(() => []),
+        adminUserService.getUsers().catch(() => []),
+        classService.getClasses().catch(() => []),
+      ])
+
+      if (!Array.isArray(appeals)) return []
+
+      return appeals.map((a) => {
+        const student = users.find((u) => u.id === a.student_id)
+        const statusMap: Record<string, 'pending' | 'approved' | 'rejected'> = {
+          PENDING: 'pending',
+          APPROVED: 'approved',
+          REJECTED: 'rejected',
+        }
+        const mappedStatus = statusMap[a.status] || 'pending'
+        return {
+          id: a.id,
+          requestId: `CMP-2026-${String(a.id).padStart(3, '0')}`,
+          sessionId: `SES-${a.attendance_record_id}`,
+          className: classes[0]?.className || 'Lập trình Web nâng cao',
+          studentId: student ? student.userId : `SV${a.student_id}`,
+          studentName: student ? student.fullName : `Sinh viên #${a.student_id}`,
+          reason: a.reason,
+          status: mappedStatus,
+          requestStatus: mappedStatus,
+          teacherNote: a.resolution_note,
+          responseNote: a.resolution_note,
+          createdAt: a.created_at || new Date().toISOString(),
+          resolvedAt: a.resolved_at,
+        }
+      })
+    } catch {
+      return []
+    }
   },
+
   getStudentComplaints: async (studentId: string): Promise<ComplaintRequest[]> => {
-    return complaintsCache.filter((c) => c.studentId === studentId)
+    try {
+      const appeals = await httpClient.get<BackendAppealItem[]>('/api/v1/appeals/me').catch(() => [])
+      if (!Array.isArray(appeals)) return []
+
+      return appeals.map((a) => {
+        const statusMap: Record<string, 'pending' | 'approved' | 'rejected'> = {
+          PENDING: 'pending',
+          APPROVED: 'approved',
+          REJECTED: 'rejected',
+        }
+        const mappedStatus = statusMap[a.status] || 'pending'
+        return {
+          id: a.id,
+          requestId: `CMP-2026-${String(a.id).padStart(3, '0')}`,
+          sessionId: `SES-${a.attendance_record_id}`,
+          className: 'Lập trình Web nâng cao',
+          studentId,
+          studentName: 'Sinh viên',
+          reason: a.reason,
+          status: mappedStatus,
+          requestStatus: mappedStatus,
+          teacherNote: a.resolution_note,
+          responseNote: a.resolution_note,
+          createdAt: a.created_at || new Date().toISOString(),
+          resolvedAt: a.resolved_at,
+        }
+      })
+    } catch {
+      return []
+    }
   },
+
   createComplaint: async (data: {
     sessionId: string
     className: string
@@ -948,107 +745,102 @@ export const complaintService = {
     studentName: string
     reason: string
   }): Promise<ComplaintRequest> => {
-    const hasPending = complaintsCache.some(
-      (c) => c.sessionId === data.sessionId && c.studentId === data.studentId && c.requestStatus === 'pending'
-    )
-    if (hasPending) {
-      throw new Error('Bạn đã có khiếu nại đang chờ xử lý cho buổi học này!')
-    }
+    const recordId = parseInt(data.sessionId.replace(/\D/g, '')) || 1
+    const res = await httpClient.post<BackendAppealItem>(`/api/v1/attendance/${recordId}/appeals`, {
+      reason: data.reason,
+    })
 
-    const newComplaint: ComplaintRequest = {
-      id: Date.now(),
-      requestId: `CMP-2026-${String(complaintsCache.length + 1).padStart(3, '0')}`,
+    return {
+      id: res.id,
+      requestId: `CMP-2026-${String(res.id).padStart(3, '0')}`,
       sessionId: data.sessionId,
       className: data.className,
       studentId: data.studentId,
       studentName: data.studentName,
       reason: data.reason,
+      status: 'pending',
       requestStatus: 'pending',
-      createdAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
+      createdAt: res.created_at || new Date().toISOString(),
     }
-    complaintsCache = [newComplaint, ...complaintsCache]
-    setStored('complaints', complaintsCache)
-    recordAuditLog(
-      'Gửi khiếu nại',
-      `${data.studentName} (${data.studentId})`,
-      `Gửi khiếu nại buổi học ${data.className}`,
-      'amber'
-    )
-    return newComplaint
   },
+
   approveComplaint: async (id: number, teacherNote: string): Promise<void> => {
-    let resolvedStudentId = ''
-    let resolvedSessionId = ''
-    complaintsCache = complaintsCache.map((c) => {
-      if (c.id === id) {
-        resolvedStudentId = c.studentId
-        resolvedSessionId = c.sessionId
-        return {
-          ...c,
-          requestStatus: 'approved' as const,
-          teacherNote,
-          resolvedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
-        }
-      }
-      return c
+    await httpClient.post(`/api/v1/appeals/${id}/resolve`, {
+      decision: 'APPROVED',
+      attendance_status: 'PRESENT',
+      resolution_note: teacherNote,
     })
-    setStored('complaints', complaintsCache)
-
-    if (resolvedStudentId && resolvedSessionId) {
-      const existingLog = attendanceLogsCache.find(
-        (l) => l.sessionId === resolvedSessionId && l.studentId === resolvedStudentId
-      )
-      if (existingLog) {
-        attendanceLogsCache = attendanceLogsCache.map((log) => {
-          if (log.sessionId === resolvedSessionId && log.studentId === resolvedStudentId) {
-            return { ...log, status: 'present' as const, reviewStatus: 'approved' as const }
-          }
-          return log
-        })
-      }
-      setStored('attendanceLogs', attendanceLogsCache)
-    }
-
-    recordAuditLog('Duyệt khiếu nại', 'Giảng viên', `Chấp thuận khiếu nại #${id}: ${teacherNote}`, 'teal')
   },
+
   rejectComplaint: async (id: number, teacherNote: string): Promise<void> => {
-    complaintsCache = complaintsCache.map((c) =>
-      c.id === id
-        ? {
-            ...c,
-            requestStatus: 'rejected' as const,
-            teacherNote,
-            resolvedAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
-          }
-        : c
-    )
-    setStored('complaints', complaintsCache)
-    recordAuditLog('Từ chối khiếu nại', 'Giảng viên', `Từ chối khiếu nại #${id}: ${teacherNote}`, 'coral')
+    await httpClient.post(`/api/v1/appeals/${id}/resolve`, {
+      decision: 'REJECTED',
+      resolution_note: teacherNote,
+    })
   },
 }
 
-// 7. Audit Log Service
+// ─── 7. Audit Log Service ─────────────────────────────────────
 export const auditService = {
   getLogs: async (): Promise<AuditLog[]> => {
-    return [...auditLogsCache]
+    try {
+      const logs = await httpClient.get<BackendAuditLogItem[]>('/api/v1/audit-logs')
+      if (!Array.isArray(logs)) return []
+
+      return logs.map((item) => {
+        const d = new Date(item.created_at)
+        const timeStr = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+        const actionLower = (item.action || '').toLowerCase()
+        const tone: 'teal' | 'amber' | 'coral' | 'blue' =
+          actionLower.includes('lock') || actionLower.includes('delete') || actionLower.includes('fail')
+            ? 'coral'
+            : actionLower.includes('update') || actionLower.includes('role')
+            ? 'blue'
+            : actionLower.includes('warn') || actionLower.includes('block')
+            ? 'amber'
+            : 'teal'
+
+        let detailStr = ''
+        if (item.details && typeof item.details === 'object') {
+          detailStr = Object.entries(item.details)
+            .map(([k, v]) => `${k}: ${v}`)
+            .join(', ')
+        } else {
+          detailStr = `${item.entity_type || 'Thực thể'} #${item.entity_id || ''}`
+        }
+
+        return {
+          id: item.id,
+          time: timeStr,
+          action: item.action,
+          actor: item.actor_user_id ? `User #${item.actor_user_id}` : 'System',
+          detail: detailStr || 'Hành động kiểm toán hệ thống',
+          tone,
+          timestamp: item.created_at,
+        }
+      })
+    } catch {
+      return []
+    }
   },
 }
 
-// 8. Face Registration Service (FR-02, FR-03)
+// ─── 8. Face Registration Service ─────────────────────────────
 export const faceService = {
   registerFaceSamples: async (
-    studentId: string,
-    sampleCount: number
+    _studentId: string,
+    _sampleCount: number
   ): Promise<{ success: boolean; qualityScore: number }> => {
     await new Promise((r) => setTimeout(r, 600))
-    usersCache = usersCache.map((u) => (u.userId === studentId ? { ...u, hasFaceRegistered: true } : u))
-    setStored('users', usersCache)
-    recordAuditLog(
-      'Đăng ký dữ liệu khuôn mặt',
-      studentId,
-      `Đã trích xuất đặc trưng 512D từ ${sampleCount} mẫu ảnh`,
-      'teal'
-    )
     return { success: true, qualityScore: 98.6 }
   },
+}
+
+export const recordAuditLog = (
+  _action: string,
+  _actor: string,
+  _detail: string,
+  _tone: 'teal' | 'amber' | 'coral' | 'blue' = 'teal'
+) => {
+  // Backend audit service logs actions automatically when endpoints are executed
 }

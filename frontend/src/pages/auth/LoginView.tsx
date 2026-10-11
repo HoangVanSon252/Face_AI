@@ -6,7 +6,6 @@ import { cn } from '../../lib/utils'
 
 interface LoginViewProps {
   onLogin: (user: User) => void
-  onGoRegister: () => void
 }
 
 const DEMO_ACCOUNTS = [
@@ -15,7 +14,7 @@ const DEMO_ACCOUNTS = [
   { role: 'admin' as Role,   label: 'Quản trị viên (Phạm Đức Long)', username: 'long.pd', color: 'bg-[#fff2dc] text-[#cc8b30] border-[#f5d98a]' },
 ]
 
-export function LoginView({ onLogin, onGoRegister }: LoginViewProps) {
+export function LoginView({ onLogin }: LoginViewProps) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPw, setShowPw] = useState(false)
@@ -36,7 +35,7 @@ export function LoginView({ onLogin, onGoRegister }: LoginViewProps) {
     try {
       const user = await authService.login(username, password, selectedRole)
       onLogin(user)
-    } catch (err: unknown) {
+    } catch (err: any) {
       setError(err instanceof Error ? err.message : 'Đăng nhập thất bại')
     } finally {
       setLoading(false)
@@ -44,12 +43,15 @@ export function LoginView({ onLogin, onGoRegister }: LoginViewProps) {
   }
 
   const handleDemoLogin = async (role: Role) => {
+    void role
+    setError('Demo login is disabled. Please use a real account.')
+    return
     setLoading(true)
     setError('')
     try {
       const user = await authService.login('', '', role)
       onLogin(user)
-    } catch (err: unknown) {
+    } catch (err: any) {
       setError(err instanceof Error ? err.message : 'Đăng nhập thất bại')
     } finally {
       setLoading(false)
@@ -70,7 +72,7 @@ export function LoginView({ onLogin, onGoRegister }: LoginViewProps) {
           <div className="inline-flex items-center justify-center w-14 h-14 bg-[#148f83] rounded-2xl shadow-[0_8px_24px_rgba(20,143,131,0.3)] mb-4">
             <CalendarCheck size={28} className="text-white" />
           </div>
-          <h1 className="text-2xl font-extrabold text-[#172b35] tracking-tight">Attendly</h1>
+          <h1 className="text-2xl font-extrabold text-[#172b35] tracking-tight">EduFace AI</h1>
           <p className="text-sm text-[#6e7d82] mt-1">Hệ thống điểm danh thông minh bằng khuôn mặt</p>
         </div>
 
@@ -141,7 +143,9 @@ export function LoginView({ onLogin, onGoRegister }: LoginViewProps) {
               <button
                 type="button"
                 className="text-[11px] text-[#148f83] hover:underline font-medium"
-                onClick={() => alert('Tính năng quên mật khẩu chưa triển khai trong bản demo.')}
+                onClick={() =>
+                  setError('Vui lòng liên hệ Quản trị viên phòng Đào tạo (admin@faceai.edu.vn) để được cấp lại mật khẩu.')
+                }
               >
                 Quên mật khẩu?
               </button>
@@ -164,14 +168,14 @@ export function LoginView({ onLogin, onGoRegister }: LoginViewProps) {
           </form>
 
           {/* Divider */}
-          <div className="flex items-center gap-3 my-5">
+          <div className="hidden">
             <div className="flex-1 h-px bg-[#e4ebeb]" />
             <span className="text-[10px] text-[#a8b5b8] font-medium uppercase tracking-wider">Demo nhanh</span>
             <div className="flex-1 h-px bg-[#e4ebeb]" />
           </div>
 
           {/* Demo accounts */}
-          <div className="grid grid-cols-3 gap-2">
+          <div className="hidden">
             {DEMO_ACCOUNTS.map(({ role, label, color }) => (
               <button
                 key={role}
@@ -191,10 +195,10 @@ export function LoginView({ onLogin, onGoRegister }: LoginViewProps) {
           </div>
 
           {/* Register link */}
-          <p className="text-center text-xs text-[#8b999d] mt-5">
+          <p className="hidden">
             Chưa có tài khoản?{' '}
             <button
-              onClick={onGoRegister}
+              disabled
               className="text-[#148f83] font-bold hover:underline"
             >
               Đăng ký ngay

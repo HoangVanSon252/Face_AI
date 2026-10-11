@@ -39,7 +39,7 @@ def create_semester(
 @router.get("/courses", response_model=list[CourseResponse])
 def list_courses(
     db: Session = Depends(dependencies.get_db),
-    _: Any = Depends(require_staff),
+    current_user=Depends(dependencies.get_current_active_user),
 ):
     return crud_course.get_courses(db)
 
@@ -55,18 +55,24 @@ def create_course(
 # ─── ClassSections ────────────────────────────────────────
 @router.get("/sections", response_model=list[ClassSectionResponse])
 def list_sections(
-    semester_id: int,
+    semester_id: int | None = None,
     db: Session = Depends(dependencies.get_db),
-    _: Any = Depends(require_staff),
+    current_user=Depends(dependencies.get_current_active_user),
 ):
-    return crud_course.get_sections_by_semester(db, semester_id)
+    lecturer_id = current_user.id if current_user.role == RoleEnum.LECTURER else None
+    student_id = current_user.id if current_user.role == RoleEnum.STUDENT else None
+    return crud_course.get_sections_by_semester(
+        db, semester_id, lecturer_id=lecturer_id, student_id=student_id
+    )
 
 @router.post("/sections", response_model=ClassSectionResponse, status_code=201)
 def create_section(
     data: ClassSectionCreate,
     db: Session = Depends(dependencies.get_db),
-    _: Any = Depends(require_admin),
+    current_user=Depends(require_staff),
 ):
+    if current_user.role == RoleEnum.LECTURER and not data.lecturer_id:
+        data.lecturer_id = current_user.id
     return crud_course.create_section(db, data)
 
 
@@ -75,8 +81,9 @@ def create_section(
 def list_enrollments(
     section_id: int,
     db: Session = Depends(dependencies.get_db),
-    _: Any = Depends(require_staff),
+    current_user=Depends(require_staff),
 ):
+    dependencies.require_section_access(db, section_id, current_user)
     return crud_course.get_enrollments_by_section(db, section_id)
 
 @router.post("/sections/{section_id}/enrollments", response_model=EnrollmentResponse, status_code=201)
@@ -84,8 +91,10 @@ def enroll_student(
     section_id: int,
     data: EnrollmentCreate,
     db: Session = Depends(dependencies.get_db),
-    _: Any = Depends(require_admin),
+    current_user=Depends(require_staff),
 ):
+    if current_user.role == RoleEnum.LECTURER:
+        dependencies.require_section_access(db, section_id, current_user)
     data.section_id = section_id
     return crud_course.enroll_student(db, data)
 
@@ -94,7 +103,7 @@ def unenroll_student(
     section_id: int,
     student_id: int,
     db: Session = Depends(dependencies.get_db),
-    _: Any = Depends(require_admin),
+    current_user=Depends(require_staff),
 ):
     ok = crud_course.unenroll_student(db, section_id=section_id, student_id=student_id)
     if not ok:

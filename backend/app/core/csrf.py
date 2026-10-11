@@ -67,7 +67,7 @@ def set_auth_cookies(response: Response, refresh_token: str) -> str:
         secure=settings.COOKIE_SECURE,         # False dev, True production (HTTPS)
         samesite=settings.COOKIE_SAMESITE,     # "lax" chặn CSRF qua cross-site
         max_age=max_age,
-        path="/api/v1/auth/refresh",          # Chỉ gửi cookie đến endpoint này
+        path="/api/v1/auth",
     )
 
     # Cookie 2: CSRF Token – NOT HttpOnly (JS cần đọc để gửi header)
@@ -86,5 +86,5 @@ def set_auth_cookies(response: Response, refresh_token: str) -> str:
 
 def clear_auth_cookies(response: Response) -> None:
     """Xoá cả 2 cookie khi logout."""
-    response.delete_cookie(key="refresh_token", path="/api/v1/auth/refresh")
+    response.delete_cookie(key="refresh_token", path="/api/v1/auth")
     response.delete_cookie(key="csrf_token", path="/")

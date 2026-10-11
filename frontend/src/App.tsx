@@ -20,7 +20,6 @@ import { ReportView } from './pages/reports/ReportView'
 import { UserManagementView } from './pages/admin/UserManagementView'
 import { AuditLogView } from './pages/admin/AuditLogView'
 import { LoginView } from './pages/auth/LoginView'
-import { RegisterView } from './pages/auth/RegisterView'
 
 export default function App() {
   return (
@@ -34,8 +33,8 @@ function MainApp() {
   const { showToast } = useToast()
 
   const [role, setRole] = useState<Role>('teacher')
-  const [currentUser, setCurrentUser] = useState<User | null>(authService.getCurrentUser('teacher'))
-  const [authScreen, setAuthScreen] = useState<'login' | 'register'>('login')
+  const [currentUser, setCurrentUser] = useState<User | null>(null)
+  const [isRestoringSession, setIsRestoringSession] = useState(true)
   const [activeView, setActiveView] = useState<View>('Tổng quan')
   const [sessionOpen, setSessionOpen] = useState(true)
   const [activeSession, setActiveSession] = useState<AttendanceSession | undefined>(() => sessionService.getActiveSession())
@@ -52,34 +51,24 @@ function MainApp() {
   }
 
   useEffect(() => {
-    // Check if backend session is active
-    authService.getMe().then((user) => {
+    const restoreSession = async () => {
+      const user = await authService.getMe()
       if (user) {
         setCurrentUser(user)
         setRole(user.role)
+        refreshLogs()
+        const classes = await classService.getClasses()
+        setAvailableClasses(classes)
+        if (classes.length > 0) setSelectedClassIdToOpen(classes[0].classId)
       }
-    })
-
-    refreshLogs()
-    classService.getClasses().then((cls) => {
-      setAvailableClasses(cls)
-      if (cls.length > 0) setSelectedClassIdToOpen(cls[0].classId)
-    })
+      setIsRestoringSession(false)
+    }
+    void restoreSession()
   }, [])
-
-  // Sync role changes
-  const handleRoleChange = (newRole: Role) => {
-    setRole(newRole)
-    const user = authService.getCurrentUser(newRole)
-    setCurrentUser(user)
-    setActiveView('Tổng quan')
-    showToast(`Đã chuyển sang vai trò ${newRole.toUpperCase()} (${user.fullName})`, 'info')
-  }
 
   const handleLogout = async () => {
     await authService.logout()
     setCurrentUser(null)
-    setAuthScreen('login')
     showToast('Đã đăng xuất khỏi hệ thống', 'info')
   }
 
@@ -89,20 +78,15 @@ function MainApp() {
     setActiveView('Tổng quan')
   }
 
+  if (isRestoringSession) {
+    return <div className="min-h-screen grid place-items-center text-slate-600">Loading session…</div>
+  }
+
   // If not logged in, show login or register screen
   if (!currentUser) {
-    if (authScreen === 'register') {
-      return (
-        <RegisterView
-          onGoLogin={() => setAuthScreen('login')}
-          onRegistered={() => setAuthScreen('login')}
-        />
-      )
-    }
     return (
       <LoginView
         onLogin={handleLoginSuccess}
-        onGoRegister={() => setAuthScreen('register')}
       />
     )
   }
@@ -175,7 +159,6 @@ function MainApp() {
           activeView={activeView}
           role={role}
           currentUser={currentUser}
-          onRoleChange={handleRoleChange}
           onOpenMobileMenu={() => setMobileMenu(true)}
         />
 
@@ -228,6 +211,7 @@ function MainApp() {
           {/* View Routing */}
           {activeView === 'Tổng quan' && role === 'teacher' && (
             <TeacherDashboard
+              currentUser={currentUser}
               pendingLogs={pendingLogs}
               onApproveLog={async (id) => {
                 await attendanceService.approveLog(id)
@@ -301,7 +285,7 @@ function MainApp() {
           )}
 
           {activeView === 'Người dùng' && (
-            <UserManagementView />
+            <UserManagementView currentUser={currentUser} onUserUpdated={(u) => setCurrentUser(u)} />
           )}
 
           {activeView === 'Nhật ký kiểm toán' && (

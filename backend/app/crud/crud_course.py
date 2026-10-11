@@ -53,12 +53,23 @@ def create_section(db: Session, data: ClassSectionCreate) -> ClassSection:
             message="Mã lớp học phần đã tồn tại trong học kỳ này.",
         )
 
-def get_sections_by_semester(db: Session, semester_id: int):
-    return (
-        db.query(ClassSection)
-        .filter(ClassSection.semester_id == semester_id)
-        .all()
-    )
+def get_sections_by_semester(
+    db: Session,
+    semester_id: int | None = None,
+    lecturer_id: int | None = None,
+    student_id: int | None = None,
+):
+    query = db.query(ClassSection)
+    if semester_id is not None:
+        query = query.filter(ClassSection.semester_id == semester_id)
+    if lecturer_id is not None:
+        query = query.filter(ClassSection.lecturer_id == lecturer_id)
+    if student_id is not None:
+        query = query.join(Enrollment, ClassSection.id == Enrollment.section_id).filter(
+            Enrollment.student_id == student_id,
+            Enrollment.status == EnrollmentStatusEnum.ENROLLED,
+        )
+    return query.all()
 
 def get_section(db: Session, section_id: int) -> ClassSection | None:
     return db.query(ClassSection).filter(ClassSection.id == section_id).first()

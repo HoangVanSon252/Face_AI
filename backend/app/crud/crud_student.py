@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session, joinedload
 from app.models.user import User, Student, UserStatusEnum, RoleEnum
+from app.models.course import ClassSection, Enrollment, EnrollmentStatusEnum
 from app.schemas.user import UserCreate, StudentProfileCreate
 from app.core.security import get_password_hash
 from app.core.exceptions import APIException
@@ -10,6 +11,28 @@ def get_all_students(db: Session, skip: int = 0, limit: int = 50):
     return (
         db.query(Student)
         .options(joinedload(Student.user))
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
+
+def get_students_for_lecturer(
+    db: Session,
+    lecturer_id: int,
+    skip: int = 0,
+    limit: int = 50,
+):
+    return (
+        db.query(Student)
+        .join(Enrollment, Enrollment.student_id == Student.user_id)
+        .join(ClassSection, ClassSection.id == Enrollment.section_id)
+        .options(joinedload(Student.user))
+        .filter(
+            ClassSection.lecturer_id == lecturer_id,
+            Enrollment.status == EnrollmentStatusEnum.ENROLLED,
+        )
+        .distinct()
         .offset(skip)
         .limit(limit)
         .all()
@@ -33,6 +56,7 @@ def create_student(
     db: Session,
     user_in: UserCreate,
     profile_in: StudentProfileCreate,
+    status: UserStatusEnum = UserStatusEnum.ACTIVE,
 ) -> Student:
     """Tạo User + Student profile trong 1 transaction."""
     try:
@@ -43,7 +67,7 @@ def create_student(
             full_name=user_in.full_name,
             password_hash=get_password_hash(user_in.password),
             role=RoleEnum.STUDENT,
-            status=UserStatusEnum.ACTIVE,
+            status=status,
         )
         db.add(db_user)
         db.flush()  # lấy db_user.id mà chưa commit
