@@ -19,7 +19,6 @@ import { ComplaintView } from './pages/complaints/ComplaintView'
 import { ReportView } from './pages/reports/ReportView'
 import { UserManagementView } from './pages/admin/UserManagementView'
 import { AuditLogView } from './pages/admin/AuditLogView'
-import { ProjectManagementView } from './pages/admin/ProjectManagementView'
 import { LoginView } from './pages/auth/LoginView'
 
 export default function App() {
@@ -287,10 +286,6 @@ function MainApp() {
 
           {activeView === 'Người dùng' && (
             <UserManagementView currentUser={currentUser} onUserUpdated={(u) => setCurrentUser(u)} />
-          )}
-
-          {activeView === 'Project management' && role === 'admin' && (
-            <ProjectManagementView />
           )}
 
           {activeView === 'Nhật ký kiểm toán' && (

@@ -143,7 +143,9 @@ export function LoginView({ onLogin }: LoginViewProps) {
               <button
                 type="button"
                 className="text-[11px] text-[#148f83] hover:underline font-medium"
-                onClick={() => alert('Tính năng quên mật khẩu chưa triển khai trong bản demo.')}
+                onClick={() =>
+                  setError('Vui lòng liên hệ Quản trị viên phòng Đào tạo (admin@faceai.edu.vn) để được cấp lại mật khẩu.')
+                }
               >
                 Quên mật khẩu?
               </button>

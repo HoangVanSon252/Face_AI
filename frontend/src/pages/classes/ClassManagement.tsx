@@ -16,6 +16,7 @@ import {
 import type { ClassItem, Role, User } from '../../types'
 import { classService, userService } from '../../services/api'
 import { Modal } from '../../components/common/Modal'
+import { ConfirmModal } from '../../components/common/ConfirmModal'
 import { useToast } from '../../components/common/Toast'
 import { cn } from '../../lib/utils'
 
@@ -36,6 +37,7 @@ export function ClassManagement({ role }: ClassManagementProps) {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showRosterModal, setShowRosterModal] = useState(false)
   const [showAddStudentModal, setShowAddStudentModal] = useState(false)
+  const [studentIdToRemove, setStudentIdToRemove] = useState<string | null>(null)
   const [searchFilter, setSearchFilter] = useState('')
 
   // Form states
@@ -100,10 +102,15 @@ export function ClassManagement({ role }: ClassManagementProps) {
     if (updated) setSelectedClass(updated)
   }
 
-  const handleRemoveStudent = async (studentId: string) => {
-    if (!selectedClass) return
-    if (!confirm(`Bạn có chắc muốn xóa sinh viên ${studentId} khỏi lớp ${selectedClass.className}?`)) return
-    await classService.removeStudentFromClass(selectedClass.classId, studentId)
+  const handleRemoveStudent = (studentId: string) => {
+    setStudentIdToRemove(studentId)
+  }
+
+  const executeRemoveStudent = async () => {
+    if (!selectedClass || !studentIdToRemove) return
+    const id = studentIdToRemove
+    setStudentIdToRemove(null)
+    await classService.removeStudentFromClass(selectedClass.classId, id)
     showToast(`Đã xóa sinh viên khỏi lớp.`, 'info')
     await loadData()
     const updated = classes.find((c) => c.classId === selectedClass.classId)
@@ -444,6 +451,18 @@ export function ClassManagement({ role }: ClassManagementProps) {
           </div>
         </div>
       </Modal>
+
+      {/* Modal: Xác nhận xóa sinh viên khỏi lớp */}
+      <ConfirmModal
+        isOpen={Boolean(studentIdToRemove)}
+        title="Xác nhận xóa sinh viên khỏi lớp"
+        message={`Bạn có chắc chắn muốn xóa sinh viên ${studentIdToRemove} khỏi danh sách lớp "${selectedClass?.className}" (${selectedClass?.classId}) không?`}
+        confirmText="Xóa sinh viên"
+        cancelText="Hủy bỏ"
+        variant="danger"
+        onConfirm={executeRemoveStudent}
+        onCancel={() => setStudentIdToRemove(null)}
+      />
     </div>
   )
 }

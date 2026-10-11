@@ -7,9 +7,7 @@ import {
   FileBarChart,
   ShieldCheck,
   Users,
-  Settings,
   Zap,
-  ChevronDown,
   X,
   LogOut,
   Sliders,
@@ -41,9 +39,9 @@ const NAV_ITEMS_BY_ROLE: Record<Role, NavItem[]> = {
     { label: 'Báo cáo', icon: FileBarChart },
   ],
   admin: [
-    { label: 'Project management', icon: Settings },
     { label: 'Tổng quan', icon: LayoutDashboard },
     { label: 'Người dùng', icon: Users },
+    { label: 'Lớp học', icon: BookOpen },
     { label: 'Báo cáo', icon: FileBarChart },
     { label: 'Nhật ký kiểm toán', icon: ShieldCheck },
   ],
@@ -128,16 +126,15 @@ export function Sidebar({
           </button>
         </div>
 
-        {/* Workspace indicator */}
-        <div className="flex items-center gap-2 px-3.5 py-2.5 mx-3 mt-3 rounded-xl bg-[#f5f8f8] border border-[#e4ebeb]">
-          <div className="w-7 h-7 rounded-lg bg-[#d92d20] text-white grid place-items-center text-[10px] font-bold flex-none">
-            PTIT
+        {/* Academic Institution Badge */}
+        <div className="flex items-center gap-2.5 px-3 py-2 mx-3 mt-3 rounded-xl bg-slate-50 border border-slate-200/80">
+          <div className="w-7 h-7 rounded-lg bg-teal-700 text-white grid place-items-center text-[10px] font-extrabold flex-none">
+            EDU
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-bold text-[#172b35] truncate">Học viện PTIT</p>
-            <p className="text-[10px] text-[#8b999d] truncate">Khoa Công nghệ thông tin</p>
+            <p className="text-xs font-bold text-slate-800 truncate">Học viện Đào tạo</p>
+            <p className="text-[10px] text-teal-700 font-medium truncate">Kỳ FA26 · Khoa CNTT</p>
           </div>
-          <ChevronDown size={13} className="text-[#8b999d] flex-none" />
         </div>
 
         {/* Navigation */}

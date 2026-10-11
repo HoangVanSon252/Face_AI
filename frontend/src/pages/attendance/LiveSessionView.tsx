@@ -14,6 +14,7 @@ import type { AttendanceSession, AttendanceLog } from '../../types'
 import { attendanceService, sessionService, classService, userService } from '../../services/api'
 import { AttendanceWebSocketClient } from '../../websocket/attendanceWs'
 import { WebcamCapture } from '../../components/attendance/WebcamCapture'
+import { ConfirmModal } from '../../components/common/ConfirmModal'
 import { useToast } from '../../components/common/Toast'
 import { cn } from '../../lib/utils'
 
@@ -37,6 +38,7 @@ export function LiveSessionView({ session, onCloseSession }: LiveSessionViewProp
   const activeClassName = session?.className || 'Lập trình Web nâng cao'
   const activeRoom = session?.room || 'Phòng A-301'
 
+  const [showCloseModal, setShowCloseModal] = useState(false)
   const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'offline'>('connecting')
   const [currentTime, setCurrentTime] = useState(new Date().toLocaleTimeString('vi-VN'))
 
@@ -135,8 +137,12 @@ export function LiveSessionView({ session, onCloseSession }: LiveSessionViewProp
   }
 
   // Close session
-  const handleCloseSession = async () => {
-    if (!confirm('Bạn có chắc muốn đóng phiên điểm danh này không? Mọi lượt quét mới sẽ bị dừng.')) return
+  const handleCloseSession = () => {
+    setShowCloseModal(true)
+  }
+
+  const executeCloseSession = async () => {
+    setShowCloseModal(false)
     await sessionService.closeSession(activeSessionId)
     showToast(`Đã kết thúc phiên điểm danh ${activeSessionId}`, 'info')
     onCloseSession()
@@ -452,6 +458,17 @@ export function LiveSessionView({ session, onCloseSession }: LiveSessionViewProp
           </div>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={showCloseModal}
+        title="Xác nhận kết thúc phiên điểm danh"
+        message={`Bạn có chắc chắn muốn đóng phiên điểm danh ${activeSessionId} (${activeClassName}) không? Mọi lượt quét khuôn mặt và ghi nhận mới sẽ bị dừng.`}
+        confirmText="Đóng phiên"
+        cancelText="Tiếp tục phiên"
+        variant="danger"
+        onConfirm={executeCloseSession}
+        onCancel={() => setShowCloseModal(false)}
+      />
     </div>
   )
 }

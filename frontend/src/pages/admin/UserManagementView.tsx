@@ -15,6 +15,7 @@ import {
 import type { Role, User } from '../../types'
 import { adminUserService } from '../../services/adminUsers'
 import { Modal } from '../../components/common/Modal'
+import { ConfirmModal } from '../../components/common/ConfirmModal'
 import { useToast } from '../../components/common/Toast'
 import { cn } from '../../lib/utils'
 
@@ -30,6 +31,7 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
   const [roleFilter, setRoleFilter] = useState<'all' | Role>('all')
 
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [confirmDeleteUser, setConfirmDeleteUser] = useState<User | null>(null)
   const [editRoleUser, setEditRoleUser] = useState<User | null>(null)
   const [newSelectedRole, setNewSelectedRole] = useState<Role>('student')
 
@@ -67,6 +69,14 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
   })
 
   const handleToggleStatus = async (user: User) => {
+    if (currentUser && (currentUser.id === user.id || currentUser.userId === user.userId)) {
+      showToast('Không thể khóa tài khoản của chính bạn!', 'error')
+      return
+    }
+    if (user.role === 'admin') {
+      showToast('Không thể khóa tài khoản Quản trị viên hệ thống!', 'error')
+      return
+    }
     const updated = await adminUserService.setUserActive(user, !user.isActive)
     const newStatus = updated.isActive
     showToast(
@@ -114,10 +124,23 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
     loadUsers()
   }
 
-  const handleDeleteUser = async (u: User) => {
-    if (!confirm(`Khóa tài khoản "${u.fullName}" (${u.userId})? Dữ liệu điểm danh vẫn được giữ lại.`)) return
-    await adminUserService.setUserActive(u, false)
-    showToast(`Đã khóa tài khoản ${u.userId}.`, 'info')
+  const handleDeleteUser = (u: User) => {
+    if (currentUser && (currentUser.id === u.id || currentUser.userId === u.userId)) {
+      showToast('Không thể xóa tài khoản của chính bạn!', 'error')
+      return
+    }
+    if (u.role === 'admin') {
+      showToast('Không thể xóa tài khoản Quản trị viên!', 'error')
+      return
+    }
+    setConfirmDeleteUser(u)
+  }
+
+  const executeDeleteUser = async () => {
+    if (!confirmDeleteUser) return
+    await adminUserService.setUserActive(confirmDeleteUser, false)
+    showToast(`Đã khóa tài khoản ${confirmDeleteUser.fullName} (${confirmDeleteUser.userId}).`, 'info')
+    setConfirmDeleteUser(null)
     loadUsers()
   }
 
@@ -235,6 +258,8 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
                       : u.role === 'teacher'
                       ? { label: 'Giảng viên', cls: 'bg-teal-50 text-teal-700 border-teal-200' }
                       : { label: 'Sinh viên', cls: 'bg-blue-50 text-blue-700 border-blue-200' }
+                  const isSelf = Boolean(currentUser && (currentUser.id === u.id || currentUser.userId === u.userId))
+                  const isAdmin = u.role === 'admin'
 
                   return (
                     <tr key={u.userId} className="hover:bg-slate-50/80 transition-colors">
@@ -310,13 +335,24 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
 
                           <button
                             onClick={() => handleToggleStatus(u)}
+                            disabled={isSelf || isAdmin}
                             className={cn(
                               'inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold rounded-md transition',
-                              u.isActive
+                              isSelf || isAdmin
+                                ? 'opacity-30 cursor-not-allowed bg-slate-100 text-slate-400 border border-slate-200'
+                                : u.isActive
                                 ? 'bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200'
                                 : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
                             )}
-                            title={u.isActive ? 'Khóa tài khoản' : 'Mở khóa'}
+                            title={
+                              isSelf
+                                ? 'Không thể khóa tài khoản của bạn'
+                                : isAdmin
+                                ? 'Không thể khóa tài khoản Quản trị viên'
+                                : u.isActive
+                                ? 'Khóa tài khoản'
+                                : 'Mở khóa'
+                            }
                           >
                             {u.isActive ? (
                               <>
@@ -329,13 +365,15 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
                             )}
                           </button>
 
-                          <button
-                            onClick={() => handleDeleteUser(u)}
-                            className="inline-flex items-center gap-1 p-1 text-xs font-semibold rounded-md bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 transition"
-                            title="Xóa tài khoản"
-                          >
-                            <Trash2 size={13} />
-                          </button>
+                          {!isSelf && !isAdmin && (
+                            <button
+                              onClick={() => handleDeleteUser(u)}
+                              className="inline-flex items-center gap-1 p-1 text-xs font-semibold rounded-md bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 transition"
+                              title="Khóa/Xóa tài khoản"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -536,6 +574,18 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
           </div>
         )}
       </Modal>
+
+      {/* Modal: Xác nhận khóa/xóa tài khoản */}
+      <ConfirmModal
+        isOpen={Boolean(confirmDeleteUser)}
+        title="Xác nhận khóa tài khoản người dùng"
+        message={`Bạn có chắc chắn muốn khóa tài khoản "${confirmDeleteUser?.fullName}" (${confirmDeleteUser?.userId}) không? Toàn bộ dữ liệu điểm danh và thông tin học phần vẫn được lưu trữ an toàn.`}
+        confirmText="Khóa tài khoản"
+        cancelText="Hủy bỏ"
+        variant="danger"
+        onConfirm={executeDeleteUser}
+        onCancel={() => setConfirmDeleteUser(null)}
+      />
     </div>
   )
 }
