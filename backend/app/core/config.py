@@ -1,3 +1,6 @@
+import base64
+import os
+from pathlib import Path
 from typing import Literal
 
 from pydantic import field_validator, model_validator
@@ -11,7 +14,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    PROJECT_NAME: str = "Face Attendance AI"
+    PROJECT_NAME: str = "EduFace AI"
     API_V1_STR: str = "/api/v1"
 
     ENVIRONMENT: Literal["development", "test", "production"] = "development"
@@ -38,6 +41,9 @@ class Settings(BaseSettings):
     MYSQL_HOST: str
     MYSQL_PORT: str
     MYSQL_DB: str
+    MYSQL_SSL_CA: str | None = None
+    MYSQL_SSL_CA_BASE64: str | None = None
+    MYSQL_SSL_REQUIRED: bool = False
     REDIS_URL: str
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
@@ -66,6 +72,36 @@ class Settings(BaseSettings):
         )
 
     @property
+    def mysql_connect_args(self) -> dict:
+        connect_args: dict = {"connect_timeout": self.DB_CONNECT_TIMEOUT}
+        if self.MYSQL_SSL_REQUIRED:
+            certificate_path = self.MYSQL_SSL_CA
+            if certificate_path and not Path(certificate_path).exists():
+                local_fallback = Path(__file__).resolve().parents[2] / "certs" / "ca.pem"
+                if local_fallback.exists():
+                    certificate_path = str(local_fallback)
+            if self.MYSQL_SSL_CA_BASE64:
+                try:
+                    certificate = base64.b64decode(
+                        self.MYSQL_SSL_CA_BASE64, validate=True
+                    )
+                except ValueError as exc:
+                    raise ValueError("MYSQL_SSL_CA_BASE64 must be valid Base64") from exc
+
+                certificate_file = Path("/tmp/aiven-ca.pem")
+                certificate_file.write_bytes(certificate)
+                certificate_file.chmod(0o600)
+                certificate_path = str(certificate_file)
+
+            if not certificate_path:
+                raise ValueError(
+                    "MYSQL_SSL_CA or MYSQL_SSL_CA_BASE64 is required when "
+                    "MYSQL_SSL_REQUIRED is true"
+                )
+            connect_args["ssl"] = {"ca": certificate_path}
+        return connect_args
+
+    @property
     def allowed_origins_list(self) -> list[str]:
         return [
             origin.strip()
@@ -75,11 +111,15 @@ class Settings(BaseSettings):
 
     @property
     def allowed_hosts_list(self) -> list[str]:
-        return [
+        hosts = [
             host.strip()
             for host in self.ALLOWED_HOSTS.split(",")
             if host.strip()
         ]
+        render_hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME", "").strip()
+        if render_hostname and render_hostname not in hosts:
+            hosts.append(render_hostname)
+        return hosts
 
     @model_validator(mode="after")
     def validate_production_security(self):

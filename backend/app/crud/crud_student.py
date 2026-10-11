@@ -56,6 +56,7 @@ def create_student(
     db: Session,
     user_in: UserCreate,
     profile_in: StudentProfileCreate,
+    status: UserStatusEnum = UserStatusEnum.ACTIVE,
 ) -> Student:
     """Tạo User + Student profile trong 1 transaction."""
     try:
@@ -66,7 +67,7 @@ def create_student(
             full_name=user_in.full_name,
             password_hash=get_password_hash(user_in.password),
             role=RoleEnum.STUDENT,
-            status=UserStatusEnum.ACTIVE,
+            status=status,
         )
         db.add(db_user)
         db.flush()  # lấy db_user.id mà chưa commit

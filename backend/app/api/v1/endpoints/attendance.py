@@ -219,3 +219,43 @@ def resolve_appeal(
     db.commit()
     db.refresh(appeal)
     return appeal
+
+
+@router.get("/attendance", response_model=list[AttendanceRecordResponse])
+def list_all_attendance(
+    session_id: int | None = None,
+    db: Session = Depends(dependencies.get_db),
+    current_user=Depends(dependencies.get_current_active_user),
+):
+    from app.models.course import ClassSection
+    from app.models.attendance import AttendanceSession
+    query = db.query(crud_attendance.AttendanceRecord)
+    if session_id is not None:
+        query = query.filter(crud_attendance.AttendanceRecord.session_id == session_id)
+    if current_user.role == RoleEnum.STUDENT:
+        query = query.filter(crud_attendance.AttendanceRecord.student_id == current_user.id)
+    elif current_user.role == RoleEnum.LECTURER:
+        query = query.join(AttendanceSession, crud_attendance.AttendanceRecord.session_id == AttendanceSession.id).join(ClassSection, AttendanceSession.section_id == ClassSection.id).filter(ClassSection.lecturer_id == current_user.id)
+    return query.order_by(crud_attendance.AttendanceRecord.check_in_at.desc(), crud_attendance.AttendanceRecord.id.desc()).all()
+
+
+@router.get("/appeals", response_model=list[AppealResponse])
+def list_all_appeals(
+    session_id: int | None = None,
+    db: Session = Depends(dependencies.get_db),
+    current_user=Depends(dependencies.get_current_active_user),
+):
+    from app.models.course import ClassSection
+    from app.models.attendance import AttendanceSession, AttendanceRecord, AttendanceAppeal
+    query = db.query(AttendanceAppeal)
+    if current_user.role == RoleEnum.STUDENT:
+        query = query.filter(AttendanceAppeal.student_id == current_user.id)
+    else:
+        if session_id is not None:
+            query = query.join(AttendanceRecord, AttendanceAppeal.attendance_record_id == AttendanceRecord.id).filter(AttendanceRecord.session_id == session_id)
+        if current_user.role == RoleEnum.LECTURER:
+            if session_id is None:
+                query = query.join(AttendanceRecord, AttendanceAppeal.attendance_record_id == AttendanceRecord.id)
+            query = query.join(AttendanceSession, AttendanceRecord.session_id == AttendanceSession.id).join(ClassSection, AttendanceSession.section_id == ClassSection.id).filter(ClassSection.lecturer_id == current_user.id)
+    return query.order_by(AttendanceAppeal.created_at.desc(), AttendanceAppeal.id.desc()).all()
+

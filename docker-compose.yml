@@ -32,11 +32,13 @@ services:
     build: ./backend
     restart: unless-stopped
     environment:
-      MYSQL_USER: root
+      MYSQL_USER: ${MYSQL_USER:-root}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
-      MYSQL_HOST: mysql
-      MYSQL_PORT: 3306
+      MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
       MYSQL_DB: ${MYSQL_DB:-face_attendance_db}
+      MYSQL_SSL_REQUIRED: ${MYSQL_SSL_REQUIRED:-false}
+      MYSQL_SSL_CA: ${MYSQL_SSL_CA:-}
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
       CSRF_SECRET_KEY: ${CSRF_SECRET_KEY:?Set CSRF_SECRET_KEY in .env}
