@@ -360,7 +360,7 @@ export const classService = {
     }
 
     // 2. Get active semester
-    let semesters = await httpClient.get<BackendSemesterItem[]>('/api/v1/academic/semesters').catch(() => [])
+    const semesters = await httpClient.get<BackendSemesterItem[]>('/api/v1/academic/semesters').catch(() => [])
     let activeSem = semesters.find((s) => s.status === 'ACTIVE' || s.status === 'active') || semesters[0]
     if (!activeSem) {
       activeSem = await httpClient.post<BackendSemesterItem>('/api/v1/academic/semesters', {
@@ -646,22 +646,6 @@ export const attendanceService = {
     })
   },
 
-  addRealtimeRecognition: (log: Omit<AttendanceLog, 'id' | 'createdAt'>): AttendanceLog => {
-    // If during live session, we can record via manual check-in API
-    const numSessionId = parseInt(log.sessionId.replace(/\D/g, '')) || 1
-    const numStudentId = parseInt(log.studentId.replace(/\D/g, '')) || 1
-
-    httpClient.post(`/api/v1/sessions/${numSessionId}/attendance`, {
-      student_id: numStudentId,
-      note: 'Realtime check-in',
-    }).catch(() => {})
-
-    return {
-      ...log,
-      id: Date.now(),
-      createdAt: new Date().toISOString(),
-    }
-  },
 }
 
 // ─── 6. Complaint / Appeals Service ───────────────────────────
@@ -828,12 +812,20 @@ export const auditService = {
 // ─── 8. Face Registration Service ─────────────────────────────
 export const faceService = {
   registerFaceSamples: async (
-    _studentId: string,
-    _sampleCount: number
-  ): Promise<{ success: boolean; qualityScore: number }> => {
-    await new Promise((r) => setTimeout(r, 600))
-    return { success: true, qualityScore: 98.6 }
+    studentId: number,
+    samples: string[]
+  ): Promise<{ id: number; status: string; sample_count: number }> => {
+    return httpClient.post(`/api/v1/students/${studentId}/face-profiles`, {
+      consent: true,
+      samples: samples.map((image_base64, index) => ({
+        image_base64,
+        is_primary: index === 0,
+      })),
+    })
   },
+
+  recognize: async (sessionId: number, image_base64: string) =>
+    httpClient.post<{ matched: boolean }>(`/api/v1/sessions/${sessionId}/recognitions`, { image_base64 }),
 }
 
 export const recordAuditLog = (

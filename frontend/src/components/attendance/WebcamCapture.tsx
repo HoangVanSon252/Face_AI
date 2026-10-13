@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Camera, CameraOff, RefreshCw } from 'lucide-react'
+import { Camera, CameraOff, FlipHorizontal, RefreshCw } from 'lucide-react'
 
 interface WebcamCaptureProps {
   isScanning?: boolean
   onCaptureFrame?: (dataUrl: string) => void
   showScanLine?: boolean
   showOverlays?: boolean
+  onCameraError?: (message: string) => void
   label?: string
   sublabel?: string
   overlayText?: string
@@ -16,13 +17,17 @@ export function WebcamCapture({
   onCaptureFrame,
   showScanLine = true,
   showOverlays = true,
+  onCameraError,
   label = 'Camera trực tiếp',
   sublabel = 'Đặt khuôn mặt vào giữa khung hình',
   overlayText = 'Camera HD · Khung quét khuôn mặt',
 }: WebcamCaptureProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
   const [cameraActive, setCameraActive] = useState<boolean>(false)
   const [hasPermissionError, setHasPermissionError] = useState<boolean>(false)
+  // Preview-only setting. The captured canvas keeps camera-native pixels for AI.
+  const [mirrorPreview, setMirrorPreview] = useState(false)
 
   const startCamera = async () => {
     try {
@@ -31,24 +36,29 @@ export function WebcamCapture({
         video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
       })
       if (videoRef.current) {
+        streamRef.current?.getTracks().forEach((track) => track.stop())
+        streamRef.current = stream
         videoRef.current.srcObject = stream
         videoRef.current.play()
         setCameraActive(true)
       }
     } catch (err) {
-      console.warn('Webcam not available or permission denied, using simulation:', err)
+      console.warn('Webcam not available or permission denied:', err)
       setHasPermissionError(true)
       setCameraActive(false)
+      onCameraError?.('Webcam access was denied or is unavailable.')
     }
   }
 
   const stopCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream
-      stream.getTracks().forEach((track) => track.stop())
-      videoRef.current.srcObject = null
-      setCameraActive(false)
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
     }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null
+    }
+    setCameraActive(false)
   }
 
   useEffect(() => {
@@ -70,12 +80,9 @@ export function WebcamCapture({
         onCaptureFrame?.(dataUrl)
         return dataUrl
       }
-    } else {
-      // simulated frame
-      const simulatedData = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300"><rect width="300" height="300" fill="%23148f83"/></svg>`
-      onCaptureFrame?.(simulatedData)
-      return simulatedData
     }
+    onCameraError?.('Webcam is not ready for capture.')
+    return undefined
   }
 
   return (
@@ -115,7 +122,10 @@ export function WebcamCapture({
           playsInline
           muted
           className="absolute inset-0 w-full h-full object-cover"
-          style={{ display: cameraActive ? 'block' : 'none' }}
+          style={{
+            display: cameraActive ? 'block' : 'none',
+            transform: mirrorPreview ? 'scaleX(-1)' : 'none',
+          }}
         />
 
         {!cameraActive && (
@@ -127,7 +137,7 @@ export function WebcamCapture({
               {isScanning ? 'Đang phân tích khuôn mặt...' : label}
             </span>
             <small className="text-xs text-slate-500">
-              {hasPermissionError ? 'Chế độ mô phỏng (Camera tắt)' : sublabel}
+              {hasPermissionError ? 'Không thể truy cập camera. Hãy cấp quyền rồi thử lại.' : sublabel}
             </small>
           </div>
         )}
@@ -172,6 +182,17 @@ export function WebcamCapture({
             className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-teal-700 hover:bg-teal-800 text-white transition"
           >
             <RefreshCw size={13} /> Chụp mẫu
+          </button>
+        )}
+        {cameraActive && (
+          <button
+            type="button"
+            onClick={() => setMirrorPreview((value) => !value)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition"
+            aria-pressed={mirrorPreview}
+            title="Chỉ lật khung xem; ảnh gửi AI không bị lật"
+          >
+            <FlipHorizontal size={13} /> {mirrorPreview ? 'Bỏ lật khung xem' : 'Lật khung xem'}
           </button>
         )}
       </div>

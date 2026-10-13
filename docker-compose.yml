@@ -28,9 +28,52 @@ services:
       timeout: 5s
       retries: 10
 
+  object-storage:
+    # SeaweedFS exposes an S3-compatible API and remains publicly pullable.
+    image: chrislusf/seaweedfs:latest
+    container_name: face_attendance_object_storage
+    restart: unless-stopped
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in .env}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
+      S3_BUCKET: face-attendance
+    ports:
+      - "8333:8333"
+    volumes:
+      - minio_data:/data
+
+  ai_service:
+    build: ./ai_service
+    restart: unless-stopped
+    environment:
+      MODEL_PROVIDERS: CPUExecutionProvider
+      DETECTION_SIZE: 640
+      # Put the tested .onnx file in ai_service/models and set this to /models/<file>.onnx in .env.
+      LIVENESS_MODEL_PATH: ${LIVENESS_MODEL_PATH:-}
+      LIVENESS_THRESHOLD: ${LIVENESS_THRESHOLD:-0.85}
+      LIVENESS_INPUT_WIDTH: ${LIVENESS_INPUT_WIDTH:-112}
+      LIVENESS_INPUT_HEIGHT: ${LIVENESS_INPUT_HEIGHT:-112}
+      LIVENESS_INPUT_LAYOUT: ${LIVENESS_INPUT_LAYOUT:-NCHW}
+      LIVENESS_COLOR_SPACE: ${LIVENESS_COLOR_SPACE:-RGB}
+      LIVENESS_NORMALIZATION: ${LIVENESS_NORMALIZATION:-zero_one}
+      LIVENESS_LIVE_CLASS_INDEX: ${LIVENESS_LIVE_CLASS_INDEX:-1}
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./ai_service/models:/models:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
   backend:
     build: ./backend
     restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       MYSQL_USER: ${MYSQL_USER:-root}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
@@ -44,11 +87,21 @@ services:
       CSRF_SECRET_KEY: ${CSRF_SECRET_KEY:?Set CSRF_SECRET_KEY in .env}
       COOKIE_SECURE: "true"
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
+      AI_SERVICE_URL: http://ai_service:8002
+      OBJECT_STORAGE_ENDPOINT: http://object-storage:8333
+      OBJECT_STORAGE_ACCESS_KEY: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in .env}
+      OBJECT_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
+      OBJECT_STORAGE_BUCKET: face-attendance
+      OBJECT_STORAGE_SECURE: "false"
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ai_service:
+        condition: service_healthy
+      object-storage:
+        condition: service_started
     ports:
       - "8001:8000"
     healthcheck:
@@ -56,7 +109,6 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-
   frontend:
     build: ./frontend
     restart: unless-stopped
@@ -68,3 +120,4 @@ services:
 
 volumes:
   mysql_data:
+  minio_data:

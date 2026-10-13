@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
@@ -8,6 +8,7 @@ from app.crud.crud_user import revoke_all_user_tokens
 from app.models.user import RoleEnum, User, UserStatusEnum
 from app.schemas.user import AdminPasswordReset, AdminUserResponse, AdminUserUpdate, UserCreate, UserResponse
 from app.services.audit_service import write_audit_log
+from app.services.realtime import realtime_service
 from app.services.user_service import UserService
 
 router = APIRouter()
@@ -85,6 +86,7 @@ def update_user(
     user_id: int,
     data: AdminUserUpdate,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = require_admin,
 ):
@@ -114,6 +116,18 @@ def update_user(
             target.lecturer_profile.department = department
     if target.status != UserStatusEnum.ACTIVE:
         revoke_all_user_tokens(db, target.id, commit=False)
+        background_tasks.add_task(
+            realtime_service.kick_user,
+            target.id,
+            "Tài khoản của bạn đã bị khóa hoặc vô hiệu hóa bởi Quản trị viên."
+        )
+    elif data.role is not None and data.role != before["role"]:
+        background_tasks.add_task(
+            realtime_service.send_user_event,
+            target.id,
+            "ROLE_CHANGED",
+            {"role": target.role.value}
+        )
     write_audit_log(db, action="ADMIN_USER_UPDATED", actor_user_id=current_user.id, entity_type="USER", entity_id=target.id, request=request, details={"before": before, "after": data.model_dump(exclude_unset=True, mode="json")}, commit=False)
     db.commit()
     db.refresh(target)
@@ -144,3 +158,34 @@ def get_user(
     if current_user.role != RoleEnum.ADMIN and current_user.id != user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
     return UserService.get_user_by_id(db=db, user_id=user_id)
+
+
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_user(
+    user_id: int,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = require_admin,
+):
+    target = _get_user_or_404(db, user_id)
+    if target.id == current_user.id:
+        raise HTTPException(status_code=400, detail="Admin cannot delete their own account")
+    if target.role == RoleEnum.ADMIN:
+        active_admin_count = db.query(User).filter(User.role == RoleEnum.ADMIN, User.status == UserStatusEnum.ACTIVE).count()
+        if active_admin_count <= 1:
+            raise HTTPException(status_code=409, detail="Cannot delete the last active admin")
+
+    target.status = UserStatusEnum.LOCKED
+    revoke_all_user_tokens(db, target.id, commit=False)
+    write_audit_log(
+        db, action="ADMIN_USER_DELETED", actor_user_id=current_user.id,
+        entity_type="USER", entity_id=target.id, request=request,
+        details={"username": target.username, "email": target.email}, commit=False
+    )
+    db.commit()
+    background_tasks.add_task(
+        realtime_service.kick_user,
+        target.id,
+        "Tài khoản của bạn đã bị vô hiệu hóa bởi Quản trị viên."
+    )

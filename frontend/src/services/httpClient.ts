@@ -190,6 +190,27 @@ export async function request<T>(endpoint: string, options: RequestOptions = {})
       errorCode = responseData.code
     }
 
+    if (!endpoint.includes('/auth/login')) {
+      const isSessionDead = response.status === 401
+      const isAccountLocked =
+        response.status === 403 &&
+        (errorMsg.toLowerCase().includes('inactive') || errorMsg.toLowerCase().includes('locked'))
+      if (isSessionDead || isAccountLocked) {
+        removeStoredToken()
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('auth:force-logout', {
+              detail: {
+                message: isAccountLocked
+                  ? 'Tài khoản của bạn đã bị khóa hoặc vô hiệu hóa bởi Quản trị viên.'
+                  : 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.',
+              },
+            })
+          )
+        }
+      }
+    }
+
     throw new ApiError(errorMsg, response.status, errorCode, JSON.stringify(responseData))
   }
 

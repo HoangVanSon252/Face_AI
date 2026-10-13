@@ -79,4 +79,8 @@ export const adminUserService = {
   async resetPassword(user: User, newPassword: string): Promise<void> {
     await httpClient.post(`/api/v1/users/${user.id}/reset-password`, { new_password: newPassword })
   },
+
+  async deleteUser(user: User): Promise<void> {
+    await httpClient.delete(`/api/v1/users/${user.id}`)
+  },
 }

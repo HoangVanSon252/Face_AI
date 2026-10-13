@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import {
-  Camera,
   ShieldCheck,
   Check,
   RotateCcw,
@@ -50,16 +49,16 @@ export function FaceRegistrationView({
       setCurrentStepIndex(updated.length)
       showToast(`Đã thu thập mẫu ${updated.length}/5!`, 'info')
     } else {
-      finalizeRegistration(updated.length)
+      finalizeRegistration(updated)
     }
   }
 
-  const finalizeRegistration = async (count: number) => {
+  const finalizeRegistration = async (capturedSamples: string[]) => {
     setScanning(true)
     try {
-      await faceService.registerFaceSamples(currentUser.userId, count)
+      await faceService.registerFaceSamples(currentUser.id, capturedSamples)
       setRegistered(true)
-      showToast('Đăng ký dữ liệu khuôn mặt thành công (Độ tin cậy 98.6%)!', 'success')
+      showToast('Đăng ký dữ liệu khuôn mặt thành công.', 'success')
       onRegistrationComplete?.()
     } catch {
       showToast('Có lỗi xảy ra khi trích xuất đặc trưng khuôn mặt', 'error')
@@ -162,21 +161,9 @@ export function FaceRegistrationView({
                   >
                     <RotateCcw size={14} /> Chụp lại khuôn mặt mới
                   </button>
-                ) : (
-                  <button
-                    disabled={scanning}
-                    onClick={() => handleCaptureSample('simulated_frame')}
-                    className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 text-xs font-semibold rounded-lg bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white shadow-xs transition"
-                  >
-                    {scanning ? (
-                      'Đang trích xuất đặc trưng AI...'
-                    ) : (
-                      <>
-                        <Camera size={15} /> Chụp mẫu {samples.length + 1}/5
-                      </>
-                    )}
-                  </button>
-                )}
+                ) : scanning ? (
+                  <p className="text-center text-xs font-medium text-teal-700">Đang kiểm tra sinh trắc học…</p>
+                ) : null}
               </div>
             </div>
           )}
@@ -233,7 +220,7 @@ export function FaceRegistrationView({
               </div>
               <p className="text-[11px] mt-0.5 opacity-80 leading-relaxed">
                 {registered
-                  ? 'Độ tin cậy mô hình 98.6% · Sẵn sàng tự động nhận diện trong mọi phiên học.'
+                  ? 'Hồ sơ sinh trắc học đã được lưu. Bạn có thể dùng để điểm danh trong các phiên được cấp quyền.'
                   : 'Hãy chụp đủ 5 mẫu ảnh góc mặt để hoàn tất hồ sơ sinh trắc học.'}
               </p>
             </div>

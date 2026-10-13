@@ -20,6 +20,7 @@ import { ReportView } from './pages/reports/ReportView'
 import { UserManagementView } from './pages/admin/UserManagementView'
 import { AuditLogView } from './pages/admin/AuditLogView'
 import { LoginView } from './pages/auth/LoginView'
+import { userWsClient } from './websocket/userWs'
 
 export default function App() {
   return (
@@ -36,8 +37,8 @@ function MainApp() {
   const [currentUser, setCurrentUser] = useState<User | null>(null)
   const [isRestoringSession, setIsRestoringSession] = useState(true)
   const [activeView, setActiveView] = useState<View>('Tổng quan')
-  const [sessionOpen, setSessionOpen] = useState(true)
-  const [activeSession, setActiveSession] = useState<AttendanceSession | undefined>(() => sessionService.getActiveSession())
+  const [sessionOpen, setSessionOpen] = useState(false)
+  const [activeSession, setActiveSession] = useState<AttendanceSession | undefined>(undefined)
   const [showCreateSessionModal, setShowCreateSessionModal] = useState(false)
   const [availableClasses, setAvailableClasses] = useState<ClassItem[]>([])
   const [selectedClassIdToOpen, setSelectedClassIdToOpen] = useState('IT308')
@@ -57,9 +58,15 @@ function MainApp() {
         setCurrentUser(user)
         setRole(user.role)
         refreshLogs()
-        const classes = await classService.getClasses()
+        const [classes, sessions] = await Promise.all([
+          classService.getClasses(),
+          sessionService.getSessions(),
+        ])
         setAvailableClasses(classes)
         if (classes.length > 0) setSelectedClassIdToOpen(classes[0].classId)
+        const openSession = sessions.find((session) => session.status === 'active')
+        setActiveSession(openSession)
+        setSessionOpen(Boolean(openSession))
       }
       setIsRestoringSession(false)
     }
@@ -67,14 +74,58 @@ function MainApp() {
   }, [])
 
   const handleLogout = async () => {
+    userWsClient.disconnect()
     await authService.logout()
     setCurrentUser(null)
     showToast('Đã đăng xuất khỏi hệ thống', 'info')
   }
 
-  const handleLoginSuccess = (user: User) => {
+  // Realtime user lifecycle & account status listener
+  useEffect(() => {
+    if (currentUser) {
+      userWsClient.connect()
+    } else {
+      userWsClient.disconnect()
+    }
+
+    const onForceLogout = (e: any) => {
+      const message = e.detail?.message || 'Phiên làm việc đã kết thúc hoặc tài khoản không còn hiệu lực.'
+      userWsClient.disconnect()
+      setCurrentUser(null)
+      showToast(message, 'error')
+    }
+
+    const onRoleChanged = (e: any) => {
+      const newRole = e.detail?.role?.toLowerCase()
+      if (newRole && (newRole === 'student' || newRole === 'teacher' || newRole === 'admin')) {
+        setRole(newRole)
+        setCurrentUser((prev) => (prev ? { ...prev, role: newRole } : null))
+        showToast(`Vai trò tài khoản đã được cập nhật thành: ${newRole}`, 'info')
+      }
+    }
+
+    window.addEventListener('auth:force-logout', onForceLogout)
+    window.addEventListener('auth:role-changed', onRoleChanged)
+
+    return () => {
+      window.removeEventListener('auth:force-logout', onForceLogout)
+      window.removeEventListener('auth:role-changed', onRoleChanged)
+      userWsClient.disconnect()
+    }
+  }, [currentUser, showToast])
+
+  const handleLoginSuccess = async (user: User) => {
     setCurrentUser(user)
     setRole(user.role)
+    const [classes, sessions] = await Promise.all([
+      classService.getClasses(),
+      sessionService.getSessions(),
+    ])
+    setAvailableClasses(classes)
+    if (classes.length > 0) setSelectedClassIdToOpen(classes[0].classId)
+    const openSession = sessions.find((session) => session.status === 'active')
+    setActiveSession(openSession)
+    setSessionOpen(Boolean(openSession))
     setActiveView('Tổng quan')
   }
 

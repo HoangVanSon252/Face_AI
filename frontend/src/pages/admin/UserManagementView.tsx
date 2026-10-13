@@ -138,8 +138,12 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
 
   const executeDeleteUser = async () => {
     if (!confirmDeleteUser) return
-    await adminUserService.setUserActive(confirmDeleteUser, false)
-    showToast(`Đã khóa tài khoản ${confirmDeleteUser.fullName} (${confirmDeleteUser.userId}).`, 'info')
+    try {
+      await adminUserService.deleteUser(confirmDeleteUser)
+      showToast(`Đã vô hiệu hóa và thu hồi quyền truy cập của ${confirmDeleteUser.fullName} (${confirmDeleteUser.userId}).`, 'info')
+    } catch (err: any) {
+      showToast(err.message || 'Không thể xóa tài khoản', 'error')
+    }
     setConfirmDeleteUser(null)
     loadUsers()
   }
