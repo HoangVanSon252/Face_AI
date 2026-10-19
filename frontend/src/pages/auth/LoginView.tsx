@@ -1,18 +1,12 @@
 import { useState } from 'react'
 import { CalendarCheck, Eye, EyeOff, Loader2, AlertTriangle } from 'lucide-react'
 import { authService } from '../../services/api'
-import type { User, Role } from '../../types'
+import type { User } from '../../types'
 import { cn } from '../../lib/utils'
 
 interface LoginViewProps {
   onLogin: (user: User) => void
 }
-
-const DEMO_ACCOUNTS = [
-  { role: 'student' as Role, label: 'Sinh viên (Trần Minh Khoa)', username: 'khoa.tm', color: 'bg-[#fbe8e2] text-[#c96d58] border-[#f4c5b5]' },
-  { role: 'teacher' as Role, label: 'Giảng viên (Nguyễn Thị Lan)', username: 'lan.nt', color: 'bg-[#e0f5f1] text-[#138d81] border-[#b2e0d8]' },
-  { role: 'admin' as Role,   label: 'Quản trị viên (Phạm Đức Long)', username: 'long.pd', color: 'bg-[#fff2dc] text-[#cc8b30] border-[#f5d98a]' },
-]
 
 export function LoginView({ onLogin }: LoginViewProps) {
   const [username, setUsername] = useState('')
@@ -20,7 +14,6 @@ export function LoginView({ onLogin }: LoginViewProps) {
   const [showPw, setShowPw] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [selectedRole] = useState<Role | undefined>(undefined)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -33,23 +26,7 @@ export function LoginView({ onLogin }: LoginViewProps) {
 
     setLoading(true)
     try {
-      const user = await authService.login(username, password, selectedRole)
-      onLogin(user)
-    } catch (err: any) {
-      setError(err instanceof Error ? err.message : 'Đăng nhập thất bại')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleDemoLogin = async (role: Role) => {
-    void role
-    setError('Demo login is disabled. Please use a real account.')
-    return
-    setLoading(true)
-    setError('')
-    try {
-      const user = await authService.login('', '', role)
+      const user = await authService.login(username, password)
       onLogin(user)
     } catch (err: any) {
       setError(err instanceof Error ? err.message : 'Đăng nhập thất bại')
@@ -167,43 +144,6 @@ export function LoginView({ onLogin }: LoginViewProps) {
             </button>
           </form>
 
-          {/* Divider */}
-          <div className="hidden">
-            <div className="flex-1 h-px bg-[#e4ebeb]" />
-            <span className="text-[10px] text-[#a8b5b8] font-medium uppercase tracking-wider">Demo nhanh</span>
-            <div className="flex-1 h-px bg-[#e4ebeb]" />
-          </div>
-
-          {/* Demo accounts */}
-          <div className="hidden">
-            {DEMO_ACCOUNTS.map(({ role, label, color }) => (
-              <button
-                key={role}
-                onClick={() => handleDemoLogin(role)}
-                disabled={loading}
-                className={cn(
-                  'flex flex-col items-center gap-1 py-2.5 px-1 rounded-xl border text-[10.5px] font-semibold transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-60',
-                  color
-                )}
-              >
-                <div className="w-7 h-7 rounded-lg bg-current/10 grid place-items-center text-lg">
-                  {role === 'student' ? '🎓' : role === 'teacher' ? '👨‍🏫' : '🛡️'}
-                </div>
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {/* Register link */}
-          <p className="hidden">
-            Chưa có tài khoản?{' '}
-            <button
-              disabled
-              className="text-[#148f83] font-bold hover:underline"
-            >
-              Đăng ký ngay
-            </button>
-          </p>
         </div>
 
         <p className="text-center text-[10px] text-[#a8b5b8] mt-4">

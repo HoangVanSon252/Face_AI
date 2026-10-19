@@ -10,6 +10,12 @@ class SemesterCreate(BaseModel):
     start_date: date
     end_date: date
 
+class SemesterUpdate(BaseModel):
+    code: str | None = None
+    name: str | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    status: SemesterStatusEnum | None = None
 class SemesterResponse(BaseModel):
     id: int
     code: str

@@ -102,6 +102,24 @@ interface RequestOptions extends RequestInit {
   isFormUrlEncoded?: boolean
 }
 
+/**
+ * Views subscribe to this event instead of keeping independent, stale copies of
+ * server state.  Recognition and frame-analysis POSTs are deliberately omitted:
+ * they run continuously and update the live-attendance view themselves.
+ */
+function notifyDataChanged(endpoint: string, method?: string): void {
+  const normalizedMethod = (method || 'GET').toUpperCase()
+  const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(normalizedMethod)
+  const isRealtimePipeline =
+    endpoint.includes('/auth/') ||
+    endpoint.includes('/face/detect-frame') ||
+    endpoint.includes('/recognitions')
+
+  if (isMutation && !isRealtimePipeline && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('data:changed', { detail: { endpoint, method: normalizedMethod } }))
+  }
+}
+
 export async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
   const url = endpoint.startsWith('http') ? endpoint : `${API_BASE_URL}${endpoint}`
   const headers: Record<string, string> = {
@@ -148,13 +166,19 @@ export async function request<T>(endpoint: string, options: RequestOptions = {})
       headers['Authorization'] = `Bearer ${newToken}`
       const retryResponse = await fetch(url, { ...fetchOptions, headers })
       if (retryResponse.ok) {
-        if (retryResponse.status === 204) return {} as T
-        return (await retryResponse.json()) as T
+        if (retryResponse.status === 204) {
+          notifyDataChanged(endpoint, options.method)
+          return {} as T
+        }
+        const retriedData = (await retryResponse.json()) as T
+        notifyDataChanged(endpoint, options.method)
+        return retriedData
       }
     }
   }
 
   if (response.status === 204) {
+    notifyDataChanged(endpoint, options.method)
     return {} as T
   }
 
@@ -190,9 +214,31 @@ export async function request<T>(endpoint: string, options: RequestOptions = {})
       errorCode = responseData.code
     }
 
+    if (!endpoint.includes('/auth/login')) {
+      const isSessionDead = response.status === 401
+      const isAccountLocked =
+        response.status === 403 &&
+        (errorMsg.toLowerCase().includes('inactive') || errorMsg.toLowerCase().includes('locked'))
+      if (isSessionDead || isAccountLocked) {
+        removeStoredToken()
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('auth:force-logout', {
+              detail: {
+                message: isAccountLocked
+                  ? 'Tài khoản của bạn đã bị khóa hoặc vô hiệu hóa bởi Quản trị viên.'
+                  : 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.',
+              },
+            })
+          )
+        }
+      }
+    }
+
     throw new ApiError(errorMsg, response.status, errorCode, JSON.stringify(responseData))
   }
 
+  notifyDataChanged(endpoint, options.method)
   return responseData as T
 }
 

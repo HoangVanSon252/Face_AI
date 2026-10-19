@@ -46,6 +46,20 @@ class RealtimeService:
             return
         await self._redis.publish(CHANNEL, json.dumps(message))
 
+    async def send_user_event(self, user_id: int, event: str, payload: dict) -> None:
+        message = {"user_id": user_id, "event": event, "payload": payload}
+        if self._redis is None:
+            await connection_manager.send_to_user(user_id, event, payload)
+            return
+        await self._redis.publish(CHANNEL, json.dumps(message))
+
+    async def kick_user(self, user_id: int, reason: str = "Tài khoản của bạn đã bị vô hiệu hóa.") -> None:
+        message = {"user_id": user_id, "event": "FORCE_LOGOUT", "payload": {"reason": reason}, "is_kick": True}
+        if self._redis is None:
+            await connection_manager.kick_user(user_id, reason)
+            return
+        await self._redis.publish(CHANNEL, json.dumps(message))
+
     async def _listen(self) -> None:
         if self._redis is None:
             return
@@ -56,11 +70,16 @@ class RealtimeService:
                 if raw_message.get("type") != "message":
                     continue
                 message = json.loads(raw_message["data"])
-                await connection_manager.broadcast(
-                    int(message["session_id"]),
-                    message["event"],
-                    message["payload"],
-                )
+                if message.get("is_kick") and "user_id" in message:
+                    await connection_manager.kick_user(int(message["user_id"]), message.get("payload", {}).get("reason", ""))
+                elif "user_id" in message:
+                    await connection_manager.send_to_user(int(message["user_id"]), message["event"], message["payload"])
+                elif "session_id" in message:
+                    await connection_manager.broadcast(
+                        int(message["session_id"]),
+                        message["event"],
+                        message["payload"],
+                    )
         finally:
             await pubsub.unsubscribe(CHANNEL)
             await pubsub.aclose()

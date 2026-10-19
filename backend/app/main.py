@@ -12,12 +12,15 @@ from app.api.v1.api import api_router
 from app.core.exceptions import setup_exception_handler
 from app.core.logging import setup_logging
 from app.services.realtime import realtime_service
+from app.services.object_storage import ensure_bucket
 
 setup_logging()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # Ensure the private evidence bucket exists before recognition requests arrive.
+    ensure_bucket()
     await realtime_service.start()
     try:
         yield
@@ -47,6 +50,10 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 @app.get("/")
 def root():
     return {"message": "Welcome to Face Attendance API"}
+
+@app.get("/openapi.json", include_in_schema=False)
+def openapi_alias():
+    return app.openapi()
 
 @app.get("/health", tags=["health"])
 def health() -> dict[str, str]:

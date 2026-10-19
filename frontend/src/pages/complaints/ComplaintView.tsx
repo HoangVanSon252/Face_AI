@@ -37,8 +37,8 @@ export function ComplaintView({ role, currentUser }: ComplaintViewProps) {
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all')
 
   // Student submit form
-  const [selectedCourse, setSelectedCourse] = useState('Lập trình Web nâng cao')
-  const [selectedSessionId, setSelectedSessionId] = useState('SES-IT308-0911')
+  const [selectedCourse, setSelectedCourse] = useState('')
+  const [selectedSessionId, setSelectedSessionId] = useState('')
   const [reasonText, setReasonText] = useState('')
 
   // Teacher review form

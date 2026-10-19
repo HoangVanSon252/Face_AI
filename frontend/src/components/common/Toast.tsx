@@ -1,4 +1,4 @@
-import { useState, useEffect, createContext, useContext, type ReactNode } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext, type ReactNode } from 'react'
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react'
 
 type ToastType = 'success' | 'error' | 'info'
@@ -17,18 +17,24 @@ const ToastContext = createContext<ToastContextType | undefined>(undefined)
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([])
+  const recentMessages = useRef(new Map<string, number>())
 
-  const showToast = (message: string, type: ToastType = 'success') => {
+  const showToast = useCallback((message: string, type: ToastType = 'success') => {
     const id = Date.now()
+    const key = `${type}:${message}`
+    if (id - (recentMessages.current.get(key) || 0) < 3500) return
+    recentMessages.current.set(key, id)
     setToasts((prev) => [...prev, { id, message, type }])
-  }
+  }, [])
 
   const removeToast = (id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id))
   }
 
+  const contextValue = useMemo(() => ({ showToast }), [showToast])
+
   return (
-    <ToastContext.Provider value={{ showToast }}>
+    <ToastContext.Provider value={contextValue}>
       {children}
       <div
         className="fixed bottom-5 right-5 z-[9999] flex flex-col gap-2.5 items-end pointer-events-none"

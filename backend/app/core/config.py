@@ -32,9 +32,9 @@ class Settings(BaseSettings):
     ALLOWED_HOSTS: str = "localhost,127.0.0.1,testserver,backend"
     MAX_REQUEST_BODY_SIZE: int = 5 * 1024 * 1024
 
-    RATE_LIMIT_LOGIN: str = "5/minute"
-    RATE_LIMIT_REGISTER: str = "3/minute"
-    RATE_LIMIT_REFRESH: str = "10/minute"
+    RATE_LIMIT_LOGIN: str = "60/minute"
+    RATE_LIMIT_REGISTER: str = "30/minute"
+    RATE_LIMIT_REFRESH: str = "60/minute"
 
     MYSQL_USER: str
     MYSQL_PASSWORD: str
@@ -50,6 +50,20 @@ class Settings(BaseSettings):
     DB_POOL_TIMEOUT: int = 30
     DB_CONNECT_TIMEOUT: int = 10
     REPORT_MAX_ROWS: int = 10_000
+    AI_SERVICE_URL: str = "http://ai_service:8002"
+    AI_SERVICE_TIMEOUT_SECONDS: float = 30.0
+    OBJECT_STORAGE_ENDPOINT: str | None = None
+    OBJECT_STORAGE_ACCESS_KEY: str | None = None
+    OBJECT_STORAGE_SECRET_KEY: str | None = None
+    OBJECT_STORAGE_BUCKET: str = "face-attendance"
+    OBJECT_STORAGE_SECURE: bool = False
+    FACE_MIN_SAMPLES: int = 3
+    FACE_MAX_SAMPLES: int = 5
+    FACE_MIN_QUALITY_SCORE: float = 0.65
+    FACE_MATCH_THRESHOLD: float = 0.55
+    # InsightFace cosine scores around 0.80 are stable matches in this
+    # deployment; lower scores remain in the teacher review queue.
+    FACE_AUTO_APPROVE_THRESHOLD: float = 0.80
 
     @field_validator("DEBUG", mode="before")
     @classmethod
@@ -77,7 +91,8 @@ class Settings(BaseSettings):
         if self.MYSQL_SSL_REQUIRED:
             certificate_path = self.MYSQL_SSL_CA
             if certificate_path and not Path(certificate_path).exists():
-                local_fallback = Path(__file__).resolve().parents[2] / "certs" / "ca.pem"
+                local_fallback = Path(__file__).resolve(
+                ).parents[2] / "certs" / "ca.pem"
                 if local_fallback.exists():
                     certificate_path = str(local_fallback)
             if self.MYSQL_SSL_CA_BASE64:
@@ -86,7 +101,8 @@ class Settings(BaseSettings):
                         self.MYSQL_SSL_CA_BASE64, validate=True
                     )
                 except ValueError as exc:
-                    raise ValueError("MYSQL_SSL_CA_BASE64 must be valid Base64") from exc
+                    raise ValueError(
+                        "MYSQL_SSL_CA_BASE64 must be valid Base64") from exc
 
                 certificate_file = Path("/tmp/aiven-ca.pem")
                 certificate_file.write_bytes(certificate)
@@ -137,7 +153,8 @@ class Settings(BaseSettings):
             raise ValueError("SECRET_KEY must be a strong production secret")
 
         if len(self.CSRF_SECRET_KEY) < 32 or self.CSRF_SECRET_KEY in insecure_secrets:
-            raise ValueError("CSRF_SECRET_KEY must be a strong production secret")
+            raise ValueError(
+                "CSRF_SECRET_KEY must be a strong production secret")
 
         if not self.COOKIE_SECURE:
             raise ValueError("COOKIE_SECURE must be true in production")

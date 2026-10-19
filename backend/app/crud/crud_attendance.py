@@ -14,7 +14,16 @@ from app.models.attendance import (
     VerificationMethodEnum,
 )
 from app.models.course import Enrollment, EnrollmentStatusEnum
-from app.schemas.attendance import AttendanceSessionCreate
+from app.schemas.attendance import AttendanceSessionCreate, AttendanceSessionUpdate
+
+
+def get_next_session_no(db: Session, section_id: int) -> int:
+    max_no = (
+        db.query(func.max(AttendanceSession.session_no))
+        .filter(AttendanceSession.section_id == section_id)
+        .scalar()
+    )
+    return (max_no or 0) + 1
 
 
 def get_session(db: Session, session_id: int) -> AttendanceSession | None:
@@ -27,21 +36,43 @@ def create_session(
     created_by: int,
     data: AttendanceSessionCreate,
 ) -> AttendanceSession:
+    session_data = data.model_dump()
+    if session_data.get("session_no") is None:
+        session_data["session_no"] = get_next_session_no(db, section_id)
+
     session = AttendanceSession(
         section_id=section_id,
         created_by=created_by,
-        **data.model_dump(),
+        **session_data,
     )
     db.add(session)
     db.flush()
     return session
 
 
+def update_session(
+    db: Session,
+    session: AttendanceSession,
+    data: AttendanceSessionUpdate,
+) -> AttendanceSession:
+    update_data = data.model_dump(exclude_unset=True)
+    for field, val in update_data.items():
+        if val is not None:
+            setattr(session, field, val)
+    db.flush()
+    return session
+
+
+def delete_session(db: Session, session: AttendanceSession) -> None:
+    db.delete(session)
+    db.flush()
+
+
 def list_sessions(db: Session, section_id: int) -> list[AttendanceSession]:
     return (
         db.query(AttendanceSession)
         .filter(AttendanceSession.section_id == section_id)
-        .order_by(AttendanceSession.session_no.desc())
+        .order_by(AttendanceSession.session_no.asc())
         .all()
     )
 
@@ -49,6 +80,17 @@ def list_sessions(db: Session, section_id: int) -> list[AttendanceSession]:
 def has_open_session(db: Session, section_id: int, exclude_id: int | None = None) -> bool:
     query = db.query(AttendanceSession).filter(
         AttendanceSession.section_id == section_id,
+        AttendanceSession.status == SessionStatusEnum.OPEN,
+    )
+    if exclude_id is not None:
+        query = query.filter(AttendanceSession.id != exclude_id)
+    return query.first() is not None
+
+
+def has_open_session_for_lecturer(db: Session, lecturer_id: int, exclude_id: int | None = None) -> bool:
+    """A lecturer can operate one live attendance terminal at a time."""
+    query = db.query(AttendanceSession).filter(
+        AttendanceSession.created_by == lecturer_id,
         AttendanceSession.status == SessionStatusEnum.OPEN,
     )
     if exclude_id is not None:
@@ -69,6 +111,18 @@ def is_enrolled(db: Session, section_id: int, student_id: int) -> bool:
     )
 
 
+def attendance_status_for_check_in(
+    session: AttendanceSession,
+    check_in_at: datetime,
+) -> AttendanceStatusEnum:
+    """Derive attendance from server time, never from a browser-provided status."""
+    if check_in_at < session.scheduled_start_at:
+        raise ValueError("Attendance has not started yet")
+    if check_in_at > session.scheduled_end_at:
+        raise ValueError("Attendance session has ended")
+    return AttendanceStatusEnum.LATE if check_in_at > session.late_after_at else AttendanceStatusEnum.PRESENT
+
+
 def get_record(db: Session, record_id: int) -> AttendanceRecord | None:
     return db.get(AttendanceRecord, record_id)
 
@@ -80,11 +134,7 @@ def create_manual_check_in(
     check_in_at: datetime,
     note: str | None,
 ) -> AttendanceRecord:
-    status = (
-        AttendanceStatusEnum.LATE
-        if check_in_at > session.late_after_at
-        else AttendanceStatusEnum.PRESENT
-    )
+    status = attendance_status_for_check_in(session, check_in_at)
     record = AttendanceRecord(
         session_id=session.id,
         student_id=student_id,

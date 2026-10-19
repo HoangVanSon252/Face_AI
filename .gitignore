@@ -54,6 +54,8 @@ npm-debug.log
 yarn-error.log
 yarn-debug.log
 *.log
+test-results/
+playwright-report/
 
 # ==========================================
 # THƯ MỤC UPLOAD/MEDIA
@@ -61,6 +63,9 @@ yarn-debug.log
 # Không đưa ảnh khuôn mặt test lên Git
 backend/uploads/
 backend/media/
+
+# Biometric model weights are large/licensed artifacts; configure their local path via .env.
+ai_service/models/*.onnx
 
 # ==========================================
 # OS & IDE

@@ -7,6 +7,7 @@ import type {
   AuditLog,
   Role,
   RegisterFormData,
+  Subject,
 } from '../types'
 import {
   httpClient,
@@ -35,6 +36,7 @@ interface BackendUserResponse {
     department?: string
     academic_title?: string
   }
+  has_face_registered?: boolean
 }
 
 interface BackendCourseItem {
@@ -44,6 +46,14 @@ interface BackendCourseItem {
   credits: number
   is_active: boolean
 }
+
+const mapCourse = (course: BackendCourseItem): Subject => ({
+  id: course.id,
+  code: course.course_code,
+  name: course.course_name,
+  credits: course.credits,
+  isActive: course.is_active,
+})
 
 interface BackendSemesterItem {
   id: number
@@ -93,7 +103,7 @@ interface BackendAttendanceItem {
   check_in_at?: string
   confidence_score?: number
   liveness_score?: number
-  review_status: 'PENDING' | 'APPROVED' | 'REJECTED'
+  review_status: 'AUTO_APPROVED' | 'PENDING' | 'APPROVED' | 'REJECTED'
   reviewed_by?: number
   reviewed_at?: string
   note?: string
@@ -152,7 +162,8 @@ function mapBackendUserToFrontend(u: BackendUserResponse): User {
     role,
     isActive: (u.status || '').toLowerCase() === 'active',
     department,
-    hasFaceRegistered: false,
+    administrativeClass: u.student_profile?.administrative_class,
+    hasFaceRegistered: Boolean(u.has_face_registered),
     avatar: initials || 'ND',
   }
 }
@@ -337,6 +348,8 @@ export const classService = {
           studentCount: enrolledStudentIds.length,
           maxStudents: 45,
           studentIds: enrolledStudentIds,
+          courseId: sec.course_id,
+          courseCode: c?.course_code,
         })
       }
 
@@ -360,7 +373,7 @@ export const classService = {
     }
 
     // 2. Get active semester
-    let semesters = await httpClient.get<BackendSemesterItem[]>('/api/v1/academic/semesters').catch(() => [])
+    const semesters = await httpClient.get<BackendSemesterItem[]>('/api/v1/academic/semesters').catch(() => [])
     let activeSem = semesters.find((s) => s.status === 'ACTIVE' || s.status === 'active') || semesters[0]
     if (!activeSem) {
       activeSem = await httpClient.post<BackendSemesterItem>('/api/v1/academic/semesters', {
@@ -395,9 +408,11 @@ export const classService = {
     }
   },
 
-  addStudentToClass: async (classId: string, studentId: string): Promise<void> => {
+  addStudentToClass: async (sectionRef: number | string, studentId: string): Promise<void> => {
     const classes = await classService.getClasses()
-    const target = classes.find((c) => c.classId === classId)
+    const target = typeof sectionRef === 'number'
+      ? classes.find((c) => c.id === sectionRef)
+      : classes.find((c) => c.classId === sectionRef)
     if (!target) throw new Error('Không tìm thấy lớp học')
 
     const users = await adminUserService.getUsers()
@@ -410,9 +425,11 @@ export const classService = {
     })
   },
 
-  removeStudentFromClass: async (classId: string, studentId: string): Promise<void> => {
+  removeStudentFromClass: async (sectionRef: number | string, studentId: string): Promise<void> => {
     const classes = await classService.getClasses()
-    const target = classes.find((c) => c.classId === classId)
+    const target = typeof sectionRef === 'number'
+      ? classes.find((c) => c.id === sectionRef)
+      : classes.find((c) => c.classId === sectionRef)
     if (!target) throw new Error('Không tìm thấy lớp học')
 
     const users = await adminUserService.getUsers()
@@ -421,49 +438,144 @@ export const classService = {
 
     await httpClient.delete(`/api/v1/academic/sections/${target.id}/enrollments/${studentNumericId}`)
   },
+
+  addClassToSection: async (sectionId: number, classCode: string): Promise<{ added_count: number }> => {
+    return httpClient.post<{ added_count: number }>(
+      `/api/v1/academic/sections/${sectionId}/classes/${encodeURIComponent(classCode)}`
+    )
+  },
+
+  removeClassFromSection: async (sectionId: number, classCode: string): Promise<void> => {
+    await httpClient.delete(
+      `/api/v1/academic/sections/${sectionId}/classes/${encodeURIComponent(classCode)}`
+    )
+  },
+
+  updateClass: async (
+    sectionId: number,
+    data: { room?: string; schedule?: string; maxStudents?: number; status?: string }
+  ): Promise<void> => {
+    await httpClient.patch(`/api/v1/academic/sections/${sectionId}`, {
+      room: data.room,
+      status: data.status || 'OPEN',
+    })
+  },
+
+  deleteClass: async (sectionId: number): Promise<void> => {
+    await httpClient.delete(`/api/v1/academic/sections/${sectionId}`)
+  },
+
+  // Tạo section (ca học) trực tiếp với đủ thông tin (course_id, semester_id)
+  createSection: async (data: {
+    sectionCode: string
+    courseId: number
+    semesterId: number
+    lecturerId: number
+    room?: string
+  }): Promise<BackendSectionItem> => {
+    return httpClient.post<BackendSectionItem>('/api/v1/academic/sections', {
+      section_code: data.sectionCode,
+      course_id: data.courseId,
+      semester_id: data.semesterId,
+      lecturer_id: data.lecturerId,
+      room: data.room || 'Phòng A-301',
+    })
+  },
 }
 
 // ─── 4. Session & Attendance Service ──────────────────────────
+export const subjectService = {
+  getSubjects: async (): Promise<Subject[]> =>
+    (await httpClient.get<BackendCourseItem[]>('/api/v1/academic/courses')).map(mapCourse),
+  createSubject: async (data: Omit<Subject, 'id' | 'isActive'>): Promise<Subject> =>
+    mapCourse(await httpClient.post<BackendCourseItem>('/api/v1/academic/courses', {
+      course_code: data.code.trim().toUpperCase(), course_name: data.name.trim(), credits: data.credits,
+    })),
+  updateSubject: async (id: number, data: Omit<Subject, 'id' | 'isActive'>): Promise<Subject> =>
+    mapCourse(await httpClient.patch<BackendCourseItem>(`/api/v1/academic/courses/${id}`, {
+      course_code: data.code.trim().toUpperCase(), course_name: data.name.trim(), credits: data.credits,
+    })),
+  deleteSubject: async (id: number): Promise<void> => { await httpClient.delete(`/api/v1/academic/courses/${id}`) },
+  getClasses: async (id: number): Promise<ClassItem[]> => {
+    const assigned = await httpClient.get<BackendSectionItem[]>(`/api/v1/academic/courses/${id}/classes`)
+    const all = await classService.getClasses()
+    return assigned.map((section) => all.find((item) => item.id === section.id)).filter((item): item is ClassItem => Boolean(item))
+  },
+  addClass: async (subjectId: number, classId: number): Promise<void> => { await httpClient.post(`/api/v1/academic/courses/${subjectId}/classes/${classId}`) },
+  removeClass: async (subjectId: number, classId: number): Promise<void> => { await httpClient.delete(`/api/v1/academic/courses/${subjectId}/classes/${classId}`) },
+}
+
+function mapBackendSessionToFrontend(
+  s: BackendSessionItem,
+  classesRes: ClassItem[],
+  usersRes: User[],
+  recordsRes: BackendAttendanceItem[]
+): AttendanceSession {
+  const cls = classesRes.find((c) => c.id === s.section_id)
+  const creator = usersRes.find((u) => u.id === s.created_by)
+  const formatTime = (iso: string) => {
+    if (!iso) return ''
+    const d = new Date(iso)
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  }
+
+  const sessionRecords = Array.isArray(recordsRes)
+    ? recordsRes.filter((record) => record.session_id === s.id && record.review_status !== 'REJECTED')
+    : []
+  const presentCount = sessionRecords.filter(
+    (record) => record.status === 'PRESENT' || record.status === 'LATE'
+  ).length
+  const lateCount = sessionRecords.filter((record) => record.status === 'LATE').length
+  const totalEnrolled = cls?.studentCount || 0
+
+  let uiStatus: 'active' | 'closed' | 'scheduled' | 'cancelled' = 'closed'
+  if (s.status === 'OPEN') uiStatus = 'active'
+  else if (s.status === 'SCHEDULED') uiStatus = 'scheduled'
+  else if (s.status === 'CANCELLED') uiStatus = 'cancelled'
+
+  return {
+    id: s.id,
+    sectionId: s.section_id,
+    sessionNo: s.session_no,
+    title: s.title || `Buổi ${s.session_no}`,
+    sessionId: `SES-${cls?.classId || s.section_id}-${s.session_no}`,
+    classId: cls?.classId || `SEC${s.section_id}`,
+    className: cls?.className || `Học phần ${s.section_id}`,
+    room: cls?.room || 'Phòng A-301',
+    startTime: formatTime(s.scheduled_start_at) || '08:00',
+    endTime: formatTime(s.scheduled_end_at) || '10:00',
+    lateAfter: formatTime(s.late_after_at) || '08:15',
+    scheduledStartAt: s.scheduled_start_at,
+    scheduledEndAt: s.scheduled_end_at,
+    lateAfterAt: s.late_after_at,
+    rawStatus: s.status,
+    status: uiStatus,
+    createdBy: s.created_by,
+    createdByName: creator?.fullName || 'Giảng viên',
+    createdAt: s.scheduled_start_at || new Date().toISOString(),
+    totalEnrolled,
+    presentCount,
+    lateCount,
+    absentCount: Math.max(0, totalEnrolled - presentCount),
+  }
+}
+
 export const sessionService = {
   getSessions: async (): Promise<AttendanceSession[]> => {
     try {
-      const [sessionsRes, classesRes, usersRes] = await Promise.all([
+      cachedActiveSession = undefined
+      const [sessionsRes, classesRes, usersRes, recordsRes] = await Promise.all([
         httpClient.get<BackendSessionItem[]>('/api/v1/sessions').catch(() => []),
         classService.getClasses().catch(() => []),
         adminUserService.getUsers().catch(() => []),
+        httpClient.get<BackendAttendanceItem[]>('/api/v1/attendance').catch(() => []),
       ])
 
       if (!Array.isArray(sessionsRes)) return []
 
       const mapped = sessionsRes.map((s) => {
-        const cls = classesRes.find((c) => c.id === s.section_id)
-        const creator = usersRes.find((u) => u.id === s.created_by)
-        const formatTime = (iso: string) => {
-          if (!iso) return ''
-          const d = new Date(iso)
-          return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-        }
-
-        const isSessionActive = s.status === 'OPEN'
-        const item: AttendanceSession = {
-          id: s.id,
-          sessionId: `SES-${cls?.classId || s.section_id}-${s.session_no}`,
-          classId: cls?.classId || `SEC${s.section_id}`,
-          className: cls?.className || `Học phần ${s.section_id}`,
-          room: cls?.room || 'Phòng A-301',
-          startTime: formatTime(s.scheduled_start_at) || '08:00',
-          endTime: formatTime(s.scheduled_end_at) || '10:00',
-          lateAfter: formatTime(s.late_after_at) || '08:15',
-          status: isSessionActive ? 'active' : 'closed',
-          createdBy: s.created_by,
-          createdByName: creator?.fullName || 'Giảng viên',
-          createdAt: s.scheduled_start_at || new Date().toISOString(),
-          totalEnrolled: cls?.studentCount || 0,
-          presentCount: 0,
-          lateCount: 0,
-          absentCount: cls?.studentCount || 0,
-        }
-        if (isSessionActive) {
+        const item = mapBackendSessionToFrontend(s, classesRes, usersRes, recordsRes)
+        if (s.status === 'OPEN') {
           cachedActiveSession = item
         }
         return item
@@ -473,6 +585,125 @@ export const sessionService = {
     } catch {
       return []
     }
+  },
+
+  getSessionsForSection: async (sectionId: number): Promise<AttendanceSession[]> => {
+    try {
+      const [sessionsRes, classesRes, usersRes, recordsRes] = await Promise.all([
+        httpClient.get<BackendSessionItem[]>(`/api/v1/sections/${sectionId}/sessions`).catch(() => []),
+        classService.getClasses().catch(() => []),
+        adminUserService.getUsers().catch(() => []),
+        httpClient.get<BackendAttendanceItem[]>('/api/v1/attendance').catch(() => []),
+      ])
+
+      if (!Array.isArray(sessionsRes)) return []
+      return sessionsRes.map((s) => mapBackendSessionToFrontend(s, classesRes, usersRes, recordsRes))
+    } catch {
+      return []
+    }
+  },
+
+  createSectionSession: async (
+    sectionId: number,
+    data: {
+      title?: string
+      scheduledStartAt: string
+      scheduledEndAt: string
+      lateAfterAt: string
+      sessionNo?: number
+    }
+  ): Promise<AttendanceSession> => {
+    const created = await httpClient.post<BackendSessionItem>(
+      `/api/v1/sections/${sectionId}/sessions`,
+      {
+        session_no: data.sessionNo,
+        title: data.title,
+        scheduled_start_at: data.scheduledStartAt,
+        scheduled_end_at: data.scheduledEndAt,
+        late_after_at: data.lateAfterAt,
+      }
+    )
+
+    const [classesRes, usersRes] = await Promise.all([
+      classService.getClasses().catch(() => []),
+      adminUserService.getUsers().catch(() => []),
+    ])
+    return mapBackendSessionToFrontend(created, classesRes, usersRes, [])
+  },
+
+  updateSession: async (
+    sessionId: number,
+    data: {
+      title?: string
+      scheduledStartAt?: string
+      scheduledEndAt?: string
+      lateAfterAt?: string
+    }
+  ): Promise<AttendanceSession> => {
+    const updated = await httpClient.patch<BackendSessionItem>(
+      `/api/v1/sessions/${sessionId}`,
+      {
+        title: data.title,
+        scheduled_start_at: data.scheduledStartAt,
+        scheduled_end_at: data.scheduledEndAt,
+        late_after_at: data.lateAfterAt,
+      }
+    )
+    const [classesRes, usersRes] = await Promise.all([
+      classService.getClasses().catch(() => []),
+      adminUserService.getUsers().catch(() => []),
+    ])
+    return mapBackendSessionToFrontend(updated, classesRes, usersRes, [])
+  },
+
+  deleteSession: async (sessionId: number): Promise<void> => {
+    await httpClient.delete(`/api/v1/sessions/${sessionId}`)
+  },
+
+  generateSemesterSessions: async (
+    sectionId: number,
+    data: {
+      daysOfWeek: number[]
+      startTime: string
+      endTime: string
+      lateMinutes?: number
+      startDate: string
+      endDate: string
+      totalSessions?: number
+      titlePrefix?: string
+    }
+  ): Promise<AttendanceSession[]> => {
+    const res = await httpClient.post<BackendSessionItem[]>(
+      `/api/v1/sections/${sectionId}/sessions/batch`,
+      {
+        days_of_week: data.daysOfWeek,
+        start_time: data.startTime,
+        end_time: data.endTime,
+        late_minutes: data.lateMinutes ?? 15,
+        start_date: data.startDate,
+        end_date: data.endDate,
+        total_sessions: data.totalSessions,
+        title_prefix: data.titlePrefix || 'Buổi',
+      }
+    )
+    const [classesRes, usersRes] = await Promise.all([
+      classService.getClasses().catch(() => []),
+      adminUserService.getUsers().catch(() => []),
+    ])
+    return res.map((s) => mapBackendSessionToFrontend(s, classesRes, usersRes, []))
+  },
+
+  openSession: async (sessionId: number): Promise<AttendanceSession> => {
+    const opened = await httpClient.post<BackendSessionItem>(
+      `/api/v1/sessions/${sessionId}/open`
+    )
+    const [classesRes, usersRes] = await Promise.all([
+      classService.getClasses().catch(() => []),
+      adminUserService.getUsers().catch(() => []),
+    ])
+    const sessionObj = mapBackendSessionToFrontend(opened, classesRes, usersRes, [])
+    cachedActiveSession = sessionObj
+    return sessionObj
   },
 
   getActiveSession: (): AttendanceSession | undefined => {
@@ -492,15 +723,22 @@ export const sessionService = {
     lateAfter: string
     teacherId: number
     teacherName: string
+    scheduledDate?: string
   }): Promise<AttendanceSession> => {
     const classes = await classService.getClasses()
     const targetClass = classes.find((c) => c.classId === data.classId)
     if (!targetClass) throw new Error('Không tìm thấy lớp học')
 
-    const todayStr = new Date().toISOString().slice(0, 10)
-    const scheduledStart = `${todayStr}T${data.startTime || '08:00'}:00`
-    const scheduledEnd = `${todayStr}T${data.endTime || '10:00'}:00`
-    const lateAfter = `${todayStr}T${data.lateAfter || '08:15'}:00`
+    const now = new Date()
+    const localDateStr = data.scheduledDate || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+
+    const startLocal = new Date(`${localDateStr}T${data.startTime || '08:00'}:00`)
+    const endLocal = new Date(`${localDateStr}T${data.endTime || '10:00'}:00`)
+    const lateLocal = new Date(`${localDateStr}T${data.lateAfter || '08:15'}:00`)
+
+    const scheduledStart = startLocal.toISOString()
+    const scheduledEnd = endLocal.toISOString()
+    const lateAfter = lateLocal.toISOString()
 
     // Count existing sessions in section to generate session_no
     const existing = await httpClient.get<BackendSessionItem[]>(
@@ -526,6 +764,9 @@ export const sessionService = {
 
     const sessionObj: AttendanceSession = {
       id: opened.id,
+      sectionId: targetClass.id,
+      sessionNo: opened.session_no,
+      title: opened.title || `Buổi ${opened.session_no}`,
       sessionId: `SES-${data.classId}-${opened.session_no}`,
       classId: data.classId,
       className: data.className,
@@ -533,6 +774,10 @@ export const sessionService = {
       startTime: data.startTime,
       endTime: data.endTime,
       lateAfter: data.lateAfter,
+      scheduledStartAt: opened.scheduled_start_at,
+      scheduledEndAt: opened.scheduled_end_at,
+      lateAfterAt: opened.late_after_at,
+      rawStatus: opened.status,
       status: 'active',
       createdBy: data.teacherId,
       createdByName: data.teacherName,
@@ -547,8 +792,8 @@ export const sessionService = {
     return sessionObj
   },
 
-  closeSession: async (sessionId: string): Promise<void> => {
-    const numId = parseInt(sessionId.replace(/\D/g, '')) || cachedActiveSession?.id
+  closeSession: async (sessionId: string | number): Promise<void> => {
+    const numId = typeof sessionId === 'number' ? sessionId : (parseInt(sessionId.replace(/\D/g, '')) || cachedActiveSession?.id)
     if (numId) {
       await httpClient.post(`/api/v1/sessions/${numId}/close`).catch(() => {})
     }
@@ -565,16 +810,18 @@ export const attendanceService = {
     try {
       const numSessionId = sessionId ? parseInt(sessionId.replace(/\D/g, '')) || undefined : undefined
       const endpoint = numSessionId ? `/api/v1/attendance?session_id=${numSessionId}` : '/api/v1/attendance'
-      const [records, users, classes] = await Promise.all([
+      const [records, users, classes, sessions] = await Promise.all([
         httpClient.get<BackendAttendanceItem[]>(endpoint).catch(() => []),
         adminUserService.getUsers().catch(() => []),
         classService.getClasses().catch(() => []),
+        sessionService.getSessions().catch(() => []),
       ])
 
       if (!Array.isArray(records)) return []
 
       return records.map((r) => {
         const student = users.find((u) => u.id === r.student_id)
+        const currentSession = sessions.find((s) => s.id === r.session_id)
         const formatTime = (iso?: string) => {
           if (!iso) return 'Chưa ghi nhận'
           const d = new Date(iso)
@@ -588,20 +835,31 @@ export const attendanceService = {
           EXCUSED: 'present',
         }
         const reviewMap: Record<string, 'pending' | 'approved' | 'rejected'> = {
+          AUTO_APPROVED: 'approved',
           PENDING: 'pending',
           APPROVED: 'approved',
           REJECTED: 'rejected',
         }
 
+        let lateMinutes: number | undefined = undefined
+        if (r.status === 'LATE' && r.check_in_at && currentSession?.lateAfterAt) {
+          const diffMs = new Date(r.check_in_at).getTime() - new Date(currentSession.lateAfterAt).getTime()
+          if (diffMs > 0) {
+            lateMinutes = Math.max(1, Math.round(diffMs / 60000))
+          }
+        }
+
         return {
           id: r.id,
           sessionId: `SES-${r.session_id}`,
-          classId: classes[0]?.classId || 'IT308',
+          classId: classes.find((c) => c.id === currentSession?.sectionId)?.classId || `SESSION-${r.session_id}`,
           studentId: student ? student.userId : `SV${r.student_id}`,
           studentName: student ? student.fullName : `Sinh viên #${r.student_id}`,
           checkInTime: formatTime(r.check_in_at),
-          confidenceScore: r.confidence_score ? Number(r.confidence_score) : 95.0,
+          // API stores a cosine similarity in [0, 1]; UI consistently shows percent.
+          confidenceScore: r.confidence_score == null ? 0 : Number(r.confidence_score) * 100,
           status: statusMap[r.status] || 'present',
+          lateMinutes,
           reviewStatus: reviewMap[r.review_status] || 'approved',
           method: r.verification_method === 'FACE' ? 'Khuôn mặt' : 'Thủ công',
           createdAt: r.check_in_at || new Date().toISOString(),
@@ -614,21 +872,36 @@ export const attendanceService = {
 
   getStudentLogs: async (_studentId: string): Promise<AttendanceLog[]> => {
     try {
-      const records = await httpClient.get<BackendAttendanceItem[]>('/api/v1/students/me/attendance').catch(() => [])
+      const [records, classes, sessions] = await Promise.all([
+        httpClient.get<BackendAttendanceItem[]>('/api/v1/students/me/attendance'),
+        classService.getClasses(),
+        sessionService.getSessions(),
+      ])
       if (!Array.isArray(records)) return []
-      return records.map((r) => ({
-        id: r.id,
-        sessionId: `SES-${r.session_id}`,
-        classId: 'IT308',
-        studentId: _studentId,
-        studentName: 'Sinh viên',
-        checkInTime: r.check_in_at ? r.check_in_at.slice(11, 19) : '08:00:00',
-        confidenceScore: r.confidence_score ? Number(r.confidence_score) : 95.0,
-        status: (r.status.toLowerCase() as 'present' | 'late' | 'absent') || 'present',
-        reviewStatus: (r.review_status.toLowerCase() as 'pending' | 'approved' | 'rejected') || 'approved',
-        method: r.verification_method === 'FACE' ? 'Khuôn mặt' : 'Thủ công',
-        createdAt: r.check_in_at || new Date().toISOString(),
-      }))
+      return records.map((r) => {
+        const currentSession = sessions.find((s) => s.id === r.session_id)
+        let lateMinutes: number | undefined = undefined
+        if (r.status === 'LATE' && r.check_in_at && currentSession?.lateAfterAt) {
+          const diffMs = new Date(r.check_in_at).getTime() - new Date(currentSession.lateAfterAt).getTime()
+          if (diffMs > 0) {
+            lateMinutes = Math.max(1, Math.round(diffMs / 60000))
+          }
+        }
+        return {
+          id: r.id,
+          sessionId: `SES-${r.session_id}`,
+          classId: classes.find((c) => c.id === currentSession?.sectionId)?.classId || `SESSION-${r.session_id}`,
+          studentId: _studentId,
+          studentName: _studentId,
+          checkInTime: r.check_in_at ? new Date(r.check_in_at).toLocaleTimeString('vi-VN') : 'Chưa ghi nhận',
+          confidenceScore: r.confidence_score == null ? 0 : Number(r.confidence_score) * 100,
+          status: (r.status.toLowerCase() as 'present' | 'late' | 'absent') || 'present',
+          lateMinutes,
+          reviewStatus: (r.review_status === 'AUTO_APPROVED' ? 'approved' : r.review_status.toLowerCase() as 'pending' | 'approved' | 'rejected') || 'approved',
+          method: r.verification_method === 'FACE' ? 'Khuôn mặt' : 'Thủ công',
+          createdAt: r.check_in_at || new Date().toISOString(),
+        }
+      })
     } catch {
       return []
     }
@@ -646,22 +919,13 @@ export const attendanceService = {
     })
   },
 
-  addRealtimeRecognition: (log: Omit<AttendanceLog, 'id' | 'createdAt'>): AttendanceLog => {
-    // If during live session, we can record via manual check-in API
-    const numSessionId = parseInt(log.sessionId.replace(/\D/g, '')) || 1
-    const numStudentId = parseInt(log.studentId.replace(/\D/g, '')) || 1
-
-    httpClient.post(`/api/v1/sessions/${numSessionId}/attendance`, {
-      student_id: numStudentId,
-      note: 'Realtime check-in',
-    }).catch(() => {})
-
-    return {
-      ...log,
-      id: Date.now(),
-      createdAt: new Date().toISOString(),
-    }
+  updateLogNote: async (logId: number, status: 'present' | 'late' | 'absent', note: string): Promise<void> => {
+    await httpClient.patch(`/api/v1/attendance/${logId}`, {
+      status: status.toUpperCase(),
+      note,
+    })
   },
+
 }
 
 // ─── 6. Complaint / Appeals Service ───────────────────────────
@@ -688,7 +952,7 @@ export const complaintService = {
           id: a.id,
           requestId: `CMP-2026-${String(a.id).padStart(3, '0')}`,
           sessionId: `SES-${a.attendance_record_id}`,
-          className: classes[0]?.className || 'Lập trình Web nâng cao',
+        className: classes.find((c) => c.id === a.attendance_record_id)?.className || `Session ${a.attendance_record_id}`,
           studentId: student ? student.userId : `SV${a.student_id}`,
           studentName: student ? student.fullName : `Sinh viên #${a.student_id}`,
           reason: a.reason,
@@ -721,7 +985,7 @@ export const complaintService = {
           id: a.id,
           requestId: `CMP-2026-${String(a.id).padStart(3, '0')}`,
           sessionId: `SES-${a.attendance_record_id}`,
-          className: 'Lập trình Web nâng cao',
+          className: `Session ${a.attendance_record_id}`,
           studentId,
           studentName: 'Sinh viên',
           reason: a.reason,
@@ -828,12 +1092,63 @@ export const auditService = {
 // ─── 8. Face Registration Service ─────────────────────────────
 export const faceService = {
   registerFaceSamples: async (
-    _studentId: string,
-    _sampleCount: number
-  ): Promise<{ success: boolean; qualityScore: number }> => {
-    await new Promise((r) => setTimeout(r, 600))
-    return { success: true, qualityScore: 98.6 }
+    studentId: number,
+    samples: string[]
+  ): Promise<{ id: number; status: string; sample_count: number }> => {
+    return httpClient.post(`/api/v1/students/${studentId}/face-profiles`, {
+      consent: true,
+      samples: samples.map((image_base64, index) => ({
+        image_base64,
+        is_primary: index === 0,
+      })),
+    })
   },
+
+  getFaceProfile: async (
+    studentId: number
+  ): Promise<{
+    id: number
+    student_id: number
+    status: string
+    sample_count: number
+    model_name: string
+    model_version: string
+    embedding_dimension: number
+    consent_at: string
+    activated_at?: string
+  } | null> => {
+    try {
+      return await httpClient.get(`/api/v1/students/${studentId}/face-profile`)
+    } catch {
+      return null
+    }
+  },
+
+  detectFrame: async (
+    image_base64: string
+  ): Promise<{
+    detected: boolean
+    face_count: number
+    confidence: number
+    faces: Array<{ bbox: number[]; confidence: number; landmarks: number[][] }>
+  }> => {
+    try {
+      return await httpClient.post('/api/v1/face/detect-frame', { image_base64 })
+    } catch {
+      return { detected: false, face_count: 0, confidence: 0, faces: [] }
+    }
+  },
+
+  recognize: async (sessionId: number, image_base64: string) =>
+    httpClient.post<{
+      matched: boolean
+      student_id?: number
+      attendance_record_id?: number
+      confidence_score?: number
+      quality_score?: number
+      review_required?: boolean
+      reason?: string
+    }>(`/api/v1/sessions/${sessionId}/recognitions`, { image_base64 }),
 }
 
 export const recordAuditLog = (

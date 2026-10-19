@@ -1,468 +1,66 @@
-import { useState, useEffect } from 'react'
-import {
-  BookOpen,
-  Plus,
-  Users,
-  Trash2,
-  UserPlus,
-  Search,
-  MapPin,
-  Clock,
-  ArrowRight,
-  CheckCircle2,
-  AlertCircle,
-  School,
-} from 'lucide-react'
-import type { ClassItem, Role, User } from '../../types'
-import { classService, userService } from '../../services/api'
+import { useEffect, useMemo, useState } from 'react'
+import { BookOpen, CalendarDays, Clock, MapPin, Pencil, Plus, Trash2, Users } from 'lucide-react'
+import type { AttendanceSession, ClassItem, Role, Subject, User } from '../../types'
+import { classService, sessionService, subjectService, userService } from '../../services/api'
+import { httpClient } from '../../services/httpClient'
 import { Modal } from '../../components/common/Modal'
 import { ConfirmModal } from '../../components/common/ConfirmModal'
 import { useToast } from '../../components/common/Toast'
-import { cn } from '../../lib/utils'
 
-interface ClassManagementProps {
-  role: Role
-  currentUser: User
+interface Props { role: Role; currentUser: User; onStartAttendance?: (classId: string, session?: AttendanceSession) => void; onOpenClassRoster?: (classItem: ClassItem) => void }
+interface Semester { id: number; code: string; name: string; start_date: string; end_date: string; status: 'PLANNED'|'ACTIVE'|'CLOSED' }
+interface AdminClass { id: number; code: string; name?: string; department?: string }
+const field = 'mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm'
+const localInput = (iso?: string) => iso ? new Date(iso).toISOString().slice(0,16) : ''
+const iso = (value: string) => new Date(value).toISOString()
+
+export function ClassManagement({ role, currentUser }: Props) {
+  const { showToast } = useToast(); const canEdit = role !== 'student'; const isAdmin = role === 'admin'
+  const [subjects, setSubjects] = useState<Subject[]>([]); const [sections, setSections] = useState<ClassItem[]>([]); const [students, setStudents] = useState<User[]>([])
+  const [adminClasses, setAdminClasses] = useState<AdminClass[]>([]); const [semesters, setSemesters] = useState<Semester[]>([])
+  const [active, setActive] = useState<Subject | null>(null); const [section, setSection] = useState<ClassItem | null>(null); const [sessions, setSessions] = useState<AttendanceSession[]>([])
+  const [showSubject, setShowSubject] = useState(false); const [editingSubject, setEditingSubject] = useState<Subject | null>(null); const [subjectCode, setSubjectCode] = useState(''); const [subjectName, setSubjectName] = useState(''); const [credits, setCredits] = useState('3')
+  const [showSection, setShowSection] = useState(false); const [sectionCode, setSectionCode] = useState(''); const [room, setRoom] = useState('Phòng A-301'); const [semesterId, setSemesterId] = useState<number | ''>('')
+  const [showRoster, setShowRoster] = useState(false); const [adminCode, setAdminCode] = useState(''); const [showSchedule, setShowSchedule] = useState(false)
+  const [days, setDays] = useState<number[]>([0]); const [start, setStart] = useState('08:00'); const [end, setEnd] = useState('10:00'); const [total, setTotal] = useState('15')
+  const [showSessionForm, setShowSessionForm] = useState(false); const [editingSession, setEditingSession] = useState<AttendanceSession | null>(null); const [sessionTitle, setSessionTitle] = useState(''); const [sessionStart, setSessionStart] = useState(''); const [sessionEnd, setSessionEnd] = useState(''); const [sessionLate, setSessionLate] = useState('')
+  const [showSemesters, setShowSemesters] = useState(false); const [editingSemester, setEditingSemester] = useState<Semester | null>(null); const [semCode, setSemCode] = useState(''); const [semName, setSemName] = useState(''); const [semStart, setSemStart] = useState(''); const [semEnd, setSemEnd] = useState(''); const [semStatus, setSemStatus] = useState<Semester['status']>('PLANNED')
+  const [toDelete, setToDelete] = useState<{kind:'subject'|'section'|'session'|'semester'; id:number; label:string} | null>(null)
+
+  const load = async () => { const [a,b,c,d,e] = await Promise.all([subjectService.getSubjects(), classService.getClasses(), userService.getUsers(), httpClient.get<AdminClass[]>('/api/v1/academic/student-classes').catch(()=>[]), httpClient.get<Semester[]>('/api/v1/academic/semesters').catch(()=>[])]); setSubjects(a); setSections(b); setStudents(c.filter(x=>x.role==='student')); setAdminClasses(d); setSemesters(e); if (!semesterId && e.length) setSemesterId((e.find(x=>x.status==='ACTIVE') || e[0]).id) }
+  useEffect(()=>{ void load() }, [])
+  const courseSections = useMemo(()=>active ? sections.filter(x=>x.courseId===active.id || x.courseCode===active.code) : [], [active, sections])
+  const roster = useMemo(()=>!section ? [] : students.filter(s=>section.studentIds.includes(s.userId) || section.studentIds.includes(String(s.id))), [section, students])
+  const groups = useMemo(()=>Array.from(new Set(roster.map(s=>s.administrativeClass).filter(Boolean))) as string[], [roster])
+  const refreshSessions = async (s=section) => { if(s) setSessions(await sessionService.getSessionsForSection(s.id)) }
+  const error = (e: unknown, fallback: string) => showToast(e instanceof Error ? e.message : fallback, 'error')
+
+  const openSubject = (item?: Subject) => { setEditingSubject(item || null); setSubjectCode(item?.code || ''); setSubjectName(item?.name || ''); setCredits(String(item?.credits || 3)); setShowSubject(true) }
+  const saveSubject = async (e: React.FormEvent) => { e.preventDefault(); try { const data={code:subjectCode,name:subjectName,credits:Number(credits)}; if(editingSubject) await subjectService.updateSubject(editingSubject.id,data); else await subjectService.createSubject(data); setShowSubject(false); await load(); showToast('Đã lưu môn học.','success') } catch(e){ error(e,'Không thể lưu môn học') } }
+  const openSection = (item?: ClassItem) => { setSection(item || null); setSectionCode(item?.classId || `${active?.code || 'MON'}-CA${String(courseSections.length+1).padStart(2,'0')}`); setRoom(item?.room || 'Phòng A-301'); if(item) { const matched=sections.find(x=>x.id===item.id); if(matched) setSemesterId((matched as ClassItem & { semesterId?:number }).semesterId || semesterId) }; setShowSection(true) }
+  const saveSection = async (e: React.FormEvent) => { e.preventDefault(); if(!active || !semesterId) return showToast('Hãy chọn học kỳ.','info'); try { if(section) await classService.updateClass(section.id,{room}); else await classService.createSection({sectionCode, courseId:active.id, semesterId:Number(semesterId), lecturerId:currentUser.id, room}); setShowSection(false); await load(); showToast('Đã lưu ca học.','success') } catch(e){ error(e,'Không thể lưu ca học') } }
+  const openSchedule = async (s:ClassItem) => { setSection(s); await refreshSessions(s); setShowSchedule(true) }
+  const generate = async (e:React.FormEvent) => { e.preventDefault(); const sem=semesters.find(x=>x.id===semesterId); if(!section || !sem || !days.length) return showToast('Chọn học kỳ và ít nhất một ngày học.','info'); try { await sessionService.generateSemesterSessions(section.id,{daysOfWeek:days,startTime:start,endTime:end,startDate:sem.start_date,endDate:sem.end_date,totalSessions:Number(total)||undefined}); await refreshSessions(); showToast('Đã cập nhật lịch kỳ. Chỉ các buổi tương lai chưa diễn ra được thay thế.','success') } catch(e){ error(e,'Không thể cập nhật lịch') } }
+  const openSessionForm = (item?: AttendanceSession) => { setEditingSession(item || null); setSessionTitle(item?.title || ''); setSessionStart(localInput(item?.scheduledStartAt)); setSessionEnd(localInput(item?.scheduledEndAt)); setSessionLate(localInput(item?.lateAfterAt)); setShowSessionForm(true) }
+  const saveSession = async (e:React.FormEvent) => { e.preventDefault(); if(!section || !sessionStart || !sessionEnd || !sessionLate) return showToast('Nhập đầy đủ thời gian buổi học.','info'); try { const data={title:sessionTitle,scheduledStartAt:iso(sessionStart),scheduledEndAt:iso(sessionEnd),lateAfterAt:iso(sessionLate)}; if(editingSession) await sessionService.updateSession(editingSession.id,data); else await sessionService.createSectionSession(section.id,{...data,sessionNo:sessions.length+1}); setShowSessionForm(false); await refreshSessions(); showToast('Đã lưu buổi học.','success') } catch(e){ error(e,'Không thể lưu buổi học') } }
+  const addAdminClass = async () => { if(!section || !adminCode) return; try { const result=await classService.addClassToSection(section.id,adminCode); if(!result.added_count) return showToast('Toàn bộ sinh viên của lớp này đã ở trong ca học.','info'); await load(); const all=await classService.getClasses(); setSection(all.find(x=>x.id===section.id)||section); setAdminCode(''); showToast(`Đã thêm ${result.added_count} sinh viên từ lớp ${adminCode}.`,'success') } catch(e){ error(e,'Không thể thêm lớp vào ca') } }
+  const removeAdminClass = async (code:string) => { if(!section) return; try { await classService.removeClassFromSection(section.id,code); await load(); const all=await classService.getClasses(); setSection(all.find(x=>x.id===section.id)||section); showToast('Đã bỏ lớp khỏi ca học.','success') } catch(e){ error(e,'Không thể bỏ lớp') } }
+  const openSemester = (item?:Semester) => { setEditingSemester(item||null); setSemCode(item?.code||''); setSemName(item?.name||''); setSemStart(item?.start_date||''); setSemEnd(item?.end_date||''); setSemStatus(item?.status||'PLANNED'); setShowSemesters(true) }
+  const saveSemester = async (e:React.FormEvent) => { e.preventDefault(); try { const data={code:semCode.toUpperCase(),name:semName,start_date:semStart,end_date:semEnd,status:semStatus}; if(editingSemester) await httpClient.patch(`/api/v1/academic/semesters/${editingSemester.id}`,data); else await httpClient.post('/api/v1/academic/semesters',data); setShowSemesters(false); await load(); showToast('Đã lưu học kỳ.','success') } catch(e){ error(e,'Không thể lưu học kỳ') } }
+  const remove = async () => { if(!toDelete) return; try { if(toDelete.kind==='subject') await subjectService.deleteSubject(toDelete.id); if(toDelete.kind==='section') await classService.deleteClass(toDelete.id); if(toDelete.kind==='session') await sessionService.deleteSession(toDelete.id); if(toDelete.kind==='semester') await httpClient.delete(`/api/v1/academic/semesters/${toDelete.id}`); if(toDelete.kind==='session') await refreshSessions(); else await load(); if(toDelete.kind==='subject' && active?.id===toDelete.id) setActive(null); setToDelete(null); showToast('Đã xóa dữ liệu.','success') } catch(e){ error(e,'Không thể xóa dữ liệu') } }
+
+  if(!active) return <div className="space-y-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><span className="rounded bg-teal-50 px-2 py-1 text-xs font-bold text-teal-700">QUẢN LÝ MÔN HỌC</span><h2 className="mt-3 text-2xl font-bold">Danh sách môn học</h2><p className="mt-1 text-sm text-slate-500">Mỗi môn có nhiều ca học; mỗi ca thêm các lớp sinh viên và lập lịch theo kỳ.</p></div><div className="flex gap-2">{isAdmin&&<button onClick={()=>openSemester()} className="rounded-xl border px-4 py-2 text-sm font-semibold"><CalendarDays size={16} className="mr-1 inline"/>Học kỳ</button>}{canEdit&&<button onClick={()=>openSubject()} className="rounded-xl bg-teal-700 px-4 py-2 text-sm font-semibold text-white"><Plus size={16} className="mr-1 inline"/>Tạo môn học</button>}</div></div><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{subjects.map(s=><div key={s.id} className="rounded-2xl border bg-white p-6 shadow-sm"><button onClick={()=>setActive(s)} className="block w-full text-left"><BookOpen className="text-teal-700"/><div className="mt-6 flex items-center justify-between gap-2"><h3 className="text-lg font-bold">{s.name}</h3><span className="rounded bg-slate-100 px-2 py-1 text-xs">{s.credits} tín chỉ</span></div><p className="mt-2 font-mono text-sm text-slate-500">{s.code}</p><div className="mt-5 border-t pt-4 text-sm font-semibold text-teal-700">Xem ca học →</div></button>{isAdmin&&<div className="mt-3 flex justify-end gap-3 text-xs"><button onClick={()=>openSubject(s)} className="text-teal-700"><Pencil size={13} className="mr-1 inline"/>Sửa</button><button onClick={()=>setToDelete({kind:'subject',id:s.id,label:s.name})} className="text-rose-600"><Trash2 size={13} className="mr-1 inline"/>Xóa</button></div>}</div>)}</div>{!subjects.length&&<p className="rounded-xl border border-dashed p-8 text-center text-sm text-slate-500">Chưa có môn học nào.</p>}
+  <SemesterModal open={showSemesters} onClose={()=>setShowSemesters(false)} semesters={semesters} editing={editingSemester} onEdit={openSemester} onDelete={x=>setToDelete({kind:'semester',id:x.id,label:x.name})} code={semCode} name={semName} start={semStart} end={semEnd} status={semStatus} setCode={setSemCode} setName={setSemName} setStart={setSemStart} setEnd={setSemEnd} setStatus={setSemStatus} onSave={saveSemester}/><Modal isOpen={showSubject} onClose={()=>setShowSubject(false)} title={editingSubject?'Sửa môn học':'Tạo môn học'}><form onSubmit={saveSubject} className="space-y-3"><label className="text-sm">Mã môn<input required value={subjectCode} onChange={e=>setSubjectCode(e.target.value.toUpperCase())} className={field}/></label><label className="text-sm">Tên môn<input required value={subjectName} onChange={e=>setSubjectName(e.target.value)} className={field}/></label><label className="text-sm">Số tín chỉ<input min="1" required type="number" value={credits} onChange={e=>setCredits(e.target.value)} className={field}/></label><button className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white">Lưu môn học</button></form></Modal><ConfirmModal isOpen={!!toDelete} title="Xác nhận xóa" message={`Xóa ${toDelete?.label}? Thao tác này không thể hoàn tác.`} confirmText="Xóa" onCancel={()=>setToDelete(null)} onConfirm={remove}/></div>
+
+  return <div className="space-y-5"><button onClick={()=>setActive(null)} className="text-sm font-semibold text-teal-700">← Quay lại môn học</button><div className="flex items-start justify-between"><div><span className="font-mono text-sm text-teal-700">{active.code}</span><h2 className="text-2xl font-bold">{active.name}</h2><p className="text-sm text-slate-500">Quản lý ca học, lịch theo kỳ và lớp tham gia.</p></div>{canEdit&&<button onClick={()=>openSection()} className="rounded-xl bg-teal-700 px-4 py-2 text-sm font-semibold text-white"><Plus size={16} className="mr-1 inline"/>Thêm ca học</button>}</div><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{courseSections.map(s=><div key={s.id} className="rounded-2xl border bg-white p-5 shadow-sm"><div className="flex justify-between"><span className="font-mono font-bold">{s.classId}</span><span className="rounded bg-emerald-50 px-2 py-1 text-xs text-emerald-700">{s.studentCount} SV</span></div><p className="mt-3 flex gap-2 text-sm"><MapPin size={16}/>{s.room}</p><p className="mt-2 flex gap-2 text-sm"><Clock size={16}/>Lịch theo kỳ</p><div className="mt-4 flex flex-wrap gap-2 border-t pt-4"><button onClick={()=>{setSection(s);setShowRoster(true)}} className="rounded-lg border px-3 py-2 text-xs font-semibold"><Users size={14} className="mr-1 inline"/>Lớp & sinh viên</button><button onClick={()=>openSchedule(s)} className="rounded-lg border px-3 py-2 text-xs font-semibold"><CalendarDays size={14} className="mr-1 inline"/>Lịch ca học</button>{canEdit&&<><button onClick={()=>openSection(s)} className="rounded-lg border px-3 py-2 text-xs text-teal-700">Sửa</button><button onClick={()=>setToDelete({kind:'section',id:s.id,label:s.classId})} className="rounded-lg border border-rose-200 px-3 py-2 text-xs text-rose-600">Xóa</button></>}</div></div>)}</div>{!courseSections.length&&<p className="rounded-xl border border-dashed p-8 text-center text-sm text-slate-500">Môn học chưa có ca học. Hãy tạo ca học, sau đó thêm lớp sinh viên vào ca.</p>}
+  <Modal isOpen={showSection} onClose={()=>setShowSection(false)} title={section?'Sửa ca học':'Tạo ca học'}><form onSubmit={saveSection} className="space-y-3">{!section&&<><label className="text-sm">Mã ca học<input required value={sectionCode} onChange={e=>setSectionCode(e.target.value.toUpperCase())} className={field}/></label><label className="text-sm">Học kỳ<select required value={semesterId} onChange={e=>setSemesterId(Number(e.target.value))} className={field}><option value="">Chọn học kỳ</option>{semesters.filter(x=>x.status!=='CLOSED').map(x=><option key={x.id} value={x.id}>{x.code} · {x.name}</option>)}</select></label></>}<label className="text-sm">Phòng học<input value={room} onChange={e=>setRoom(e.target.value)} className={field}/></label><button className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white">Lưu ca học</button></form></Modal>
+  <Modal isOpen={showRoster} onClose={()=>setShowRoster(false)} title={`Lớp & sinh viên · ${section?.classId||''}`} maxWidth="760px"><div className="space-y-4">{canEdit&&<div className="flex gap-2"><select value={adminCode} onChange={e=>setAdminCode(e.target.value)} className="flex-1 rounded-lg border p-2 text-sm"><option value="">Chọn lớp sinh viên để thêm vào ca</option>{adminClasses.map(x=><option key={x.id} value={x.code}>{x.code} · {x.name||x.department||'Lớp sinh viên'}</option>)}</select><button onClick={addAdminClass} className="rounded-lg bg-teal-700 px-3 text-sm font-semibold text-white">Thêm lớp</button></div>}<div className="space-y-3">{groups.map(code=><div key={code} className="rounded-xl border p-3"><div className="flex justify-between"><b>{code}</b>{canEdit&&<button onClick={()=>removeAdminClass(code)} className="text-sm text-rose-600">Bỏ lớp khỏi ca</button>}</div><p className="mt-2 text-sm text-slate-600">{roster.filter(x=>x.administrativeClass===code).map(x=>`${x.fullName} (${x.userId})`).join(', ')||'Chưa có sinh viên'}</p></div>)}{!groups.length&&<p className="text-sm text-slate-500">Chưa có lớp nào trong ca học.</p>}</div></div></Modal>
+  <Modal isOpen={showSchedule} onClose={()=>setShowSchedule(false)} title={`Lịch học theo kỳ · ${section?.classId||''}`} maxWidth="760px"><form onSubmit={generate} className="grid gap-3 md:grid-cols-2"><label className="text-sm">Học kỳ<select value={semesterId} onChange={e=>setSemesterId(Number(e.target.value))} className={field}>{semesters.map(x=><option key={x.id} value={x.id}>{x.code} ({x.start_date}–{x.end_date})</option>)}</select></label><label className="text-sm">Số buổi<input min="1" type="number" value={total} onChange={e=>setTotal(e.target.value)} className={field}/></label><div className="md:col-span-2 flex flex-wrap gap-2">{['T2','T3','T4','T5','T6','T7','CN'].map((d,i)=><button type="button" key={i} onClick={()=>setDays(days.includes(i)?days.filter(x=>x!==i):[...days,i])} className={`rounded px-3 py-2 text-sm ${days.includes(i)?'bg-teal-700 text-white':'bg-slate-100'}`}>{d}</button>)}</div><label className="text-sm">Giờ bắt đầu<input type="time" value={start} onChange={e=>setStart(e.target.value)} className={field}/></label><label className="text-sm">Giờ kết thúc<input type="time" value={end} onChange={e=>setEnd(e.target.value)} className={field}/></label><button className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white">Cập nhật lịch cả kỳ</button>{canEdit&&<button type="button" onClick={()=>openSessionForm()} className="rounded-lg border px-4 py-2 text-sm font-semibold text-teal-700"><Plus size={15} className="mr-1 inline"/>Thêm một buổi</button>}</form><div className="mt-5 divide-y">{sessions.map(x=><div key={x.id} className="flex items-center justify-between gap-3 py-3 text-sm"><div><b>{x.title || `Buổi ${x.sessionNo}`}</b><p className="text-slate-500">{new Date(x.scheduledStartAt||'').toLocaleString('vi-VN')} · {x.startTime}–{x.endTime}</p></div>{canEdit&&x.rawStatus==='SCHEDULED'&&<div className="flex gap-2"><button onClick={()=>openSessionForm(x)} className="text-teal-700">Sửa</button><button onClick={()=>setToDelete({kind:'session',id:x.id,label:x.title||`Buổi ${x.sessionNo}`})} className="text-rose-600">Xóa</button></div>}</div>)}</div></Modal>
+  <Modal isOpen={showSessionForm} onClose={()=>setShowSessionForm(false)} title={editingSession?'Sửa buổi học':'Thêm buổi học'}><form onSubmit={saveSession} className="space-y-3"><label className="text-sm">Tên buổi<input value={sessionTitle} onChange={e=>setSessionTitle(e.target.value)} className={field}/></label><label className="text-sm">Bắt đầu<input required type="datetime-local" value={sessionStart} onChange={e=>setSessionStart(e.target.value)} className={field}/></label><label className="text-sm">Muộn sau<input required type="datetime-local" value={sessionLate} onChange={e=>setSessionLate(e.target.value)} className={field}/></label><label className="text-sm">Kết thúc<input required type="datetime-local" value={sessionEnd} onChange={e=>setSessionEnd(e.target.value)} className={field}/></label><button className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white">Lưu buổi học</button></form></Modal>
+  <ConfirmModal isOpen={!!toDelete} title="Xác nhận xóa" message={`Xóa ${toDelete?.label}? Thao tác này không thể hoàn tác.`} confirmText="Xóa" onCancel={()=>setToDelete(null)} onConfirm={remove}/></div>
 }
 
-export function ClassManagement({ role }: ClassManagementProps) {
-  const isStudent = role === 'student'
-  const isTeacher = role === 'teacher'
-  const isAdmin = role === 'admin'
-  const { showToast } = useToast()
-
-  const [classes, setClasses] = useState<ClassItem[]>([])
-  const [allStudents, setAllStudents] = useState<User[]>([])
-  const [selectedClass, setSelectedClass] = useState<ClassItem | null>(null)
-  const [showCreateModal, setShowCreateModal] = useState(false)
-  const [showRosterModal, setShowRosterModal] = useState(false)
-  const [showAddStudentModal, setShowAddStudentModal] = useState(false)
-  const [studentIdToRemove, setStudentIdToRemove] = useState<string | null>(null)
-  const [searchFilter, setSearchFilter] = useState('')
-
-  // Form states
-  const [newClassId, setNewClassId] = useState('')
-  const [newClassName, setNewClassName] = useState('')
-  const [newRoom, setNewRoom] = useState('')
-  const [newSchedule, setNewSchedule] = useState('')
-  const [newDepartment, setNewDepartment] = useState('Khoa Công nghệ thông tin')
-  const [newMaxStudents, setNewMaxStudents] = useState('45')
-
-  const [selectedStudentToAdd, setSelectedStudentToAdd] = useState('')
-
-  const loadData = async () => {
-    const list = await classService.getClasses()
-    setClasses(list)
-    const users = await userService.getUsers()
-    setAllStudents(users.filter((u) => u.role === 'student'))
-  }
-
-  useEffect(() => {
-    loadData()
-  }, [])
-
-  const handleCreateClass = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!newClassId || !newClassName) {
-      showToast('Vui lòng nhập đầy đủ mã lớp và tên lớp!', 'error')
-      return
-    }
-    await classService.createClass({
-      classId: newClassId.toUpperCase().trim(),
-      className: newClassName.trim(),
-      teacherId: 2,
-      teacherName: 'Nguyễn Thị Lan',
-      room: newRoom || 'Phòng A-301',
-      schedule: newSchedule || 'Thứ 2 · 08:00 - 10:00',
-      department: newDepartment,
-      maxStudents: parseInt(newMaxStudents) || 45,
-    })
-    showToast(`Đã tạo lớp ${newClassName} thành công!`, 'success')
-    setShowCreateModal(false)
-    setNewClassId('')
-    setNewClassName('')
-    setNewRoom('')
-    setNewSchedule('')
-    loadData()
-  }
-
-  const handleOpenRoster = (cls: ClassItem) => {
-    setSelectedClass(cls)
-    setShowRosterModal(true)
-  }
-
-  const handleAddStudent = async () => {
-    if (!selectedClass || !selectedStudentToAdd) return
-    await classService.addStudentToClass(selectedClass.classId, selectedStudentToAdd)
-    showToast(`Đã thêm sinh viên ${selectedStudentToAdd} vào lớp!`, 'success')
-    setShowAddStudentModal(false)
-    setSelectedStudentToAdd('')
-    await loadData()
-    const updated = classes.find((c) => c.classId === selectedClass.classId)
-    if (updated) setSelectedClass(updated)
-  }
-
-  const handleRemoveStudent = (studentId: string) => {
-    setStudentIdToRemove(studentId)
-  }
-
-  const executeRemoveStudent = async () => {
-    if (!selectedClass || !studentIdToRemove) return
-    const id = studentIdToRemove
-    setStudentIdToRemove(null)
-    await classService.removeStudentFromClass(selectedClass.classId, id)
-    showToast(`Đã xóa sinh viên khỏi lớp.`, 'info')
-    await loadData()
-    const updated = classes.find((c) => c.classId === selectedClass.classId)
-    if (updated) setSelectedClass(updated)
-  }
-
-  const filteredClasses = classes.filter(
-    (c) =>
-      c.className.toLowerCase().includes(searchFilter.toLowerCase()) ||
-      c.classId.toLowerCase().includes(searchFilter.toLowerCase()) ||
-      c.room.toLowerCase().includes(searchFilter.toLowerCase())
-  )
-
-  return (
-    <div className="space-y-6">
-      {/* Header & Controls */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <span className="text-[11px] font-bold uppercase tracking-wider text-teal-700 bg-teal-50 px-2.5 py-1 rounded-md border border-teal-100">
-            QUẢN LÝ HỌC PHẦN
-          </span>
-          <h2 className="text-xl font-bold text-slate-800 mt-2">
-            {isStudent ? 'Lớp học của tôi' : 'Danh sách lớp học'}
-          </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            {isStudent
-              ? 'Các học phần bạn đang đăng ký trong học kỳ này.'
-              : 'Theo dõi lịch học, sĩ số, phòng học và quản lý danh sách sinh viên ghi danh.'}
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
-            <input
-              type="text"
-              placeholder="Tìm kiếm lớp học..."
-              value={searchFilter}
-              onChange={(e) => setSearchFilter(e.target.value)}
-              className="pl-9 pr-3.5 py-2 text-xs rounded-lg border border-slate-200 bg-white placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600 transition"
-            />
-          </div>
-
-          {(isTeacher || isAdmin) && (
-            <button
-              onClick={() => setShowCreateModal(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg bg-teal-700 hover:bg-teal-800 text-white shadow-xs transition shrink-0"
-            >
-              <Plus size={15} /> Tạo lớp học mới
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Course Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-        {filteredClasses.map((cls) => {
-          const isOngoing = cls.classId === 'IT308'
-          const percentFull = Math.round((cls.studentCount / cls.maxStudents) * 100)
-
-          return (
-            <div
-              key={cls.classId}
-              className="bg-white rounded-xl border border-slate-200/80 shadow-xs hover:border-slate-300 hover:shadow-md transition-all p-5 flex flex-col justify-between"
-            >
-              <div>
-                {/* Header row with Icon & Status badge */}
-                <div className="flex items-start justify-between gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-teal-50 border border-teal-100 flex items-center justify-center text-teal-700 shrink-0">
-                    <BookOpen size={20} />
-                  </div>
-                  <span
-                    className={cn(
-                      'inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-full border',
-                      isOngoing
-                        ? 'bg-rose-50 text-rose-700 border-rose-200/60'
-                        : 'bg-slate-100 text-slate-600 border-slate-200'
-                    )}
-                  >
-                    {isOngoing && <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />}
-                    {isOngoing ? 'Đang diễn ra' : 'Sắp tới'}
-                  </span>
-                </div>
-
-                {/* Title & Info */}
-                <h3 className="text-base font-bold text-slate-800 line-clamp-1">{cls.className}</h3>
-                <div className="flex items-center gap-2 text-xs text-slate-500 mt-1">
-                  <span className="font-mono font-medium text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">
-                    {cls.classId}
-                  </span>
-                  <span>·</span>
-                  <span className="truncate">{cls.teacherName}</span>
-                </div>
-
-                {/* Details */}
-                <div className="mt-4 space-y-2 text-xs text-slate-600">
-                  <div className="flex items-center gap-2">
-                    <MapPin size={14} className="text-slate-400 shrink-0" />
-                    <span>{cls.room}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Clock size={14} className="text-slate-400 shrink-0" />
-                    <span>{cls.schedule}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <School size={14} className="text-slate-400 shrink-0" />
-                    <span className="truncate">{cls.department}</span>
-                  </div>
-                </div>
-
-                {/* Capacity Progress Bar */}
-                <div className="mt-4 pt-3 border-t border-slate-100">
-                  <div className="flex items-center justify-between text-xs mb-1.5">
-                    <span className="text-slate-500 flex items-center gap-1">
-                      <Users size={13} /> Sĩ số
-                    </span>
-                    <span className="font-bold text-slate-800">
-                      {cls.studentCount} / {cls.maxStudents}{' '}
-                      <span className="font-normal text-slate-400">({percentFull}%)</span>
-                    </span>
-                  </div>
-                  <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                    <div
-                      className={cn(
-                        'h-full rounded-full transition-all',
-                        percentFull >= 90 ? 'bg-amber-500' : 'bg-teal-600'
-                      )}
-                      style={{ width: `${Math.min(percentFull, 100)}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Action Button */}
-              <div className="mt-5 pt-3 border-t border-slate-100">
-                <button
-                  onClick={() => handleOpenRoster(cls)}
-                  className="w-full inline-flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-semibold rounded-lg bg-slate-50 hover:bg-teal-50 text-slate-700 hover:text-teal-700 border border-slate-200 hover:border-teal-200 transition-colors"
-                >
-                  <Users size={14} /> Danh sách sinh viên
-                  <ArrowRight size={13} />
-                </button>
-              </div>
-            </div>
-          )
-        })}
-      </div>
-
-      {/* Modal: Tạo lớp học mới */}
-      <Modal isOpen={showCreateModal} onClose={() => setShowCreateModal(false)} title="Tạo lớp học mới">
-        <form onSubmit={handleCreateClass} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Mã lớp / Mã học phần *</label>
-            <input
-              placeholder="VD: IT308, CS101..."
-              value={newClassId}
-              onChange={(e) => setNewClassId(e.target.value)}
-              required
-              className="w-full px-3.5 py-2 text-xs rounded-lg border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600 uppercase font-mono"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Tên học phần *</label>
-            <input
-              placeholder="VD: Lập trình Web nâng cao"
-              value={newClassName}
-              onChange={(e) => setNewClassName(e.target.value)}
-              required
-              className="w-full px-3.5 py-2 text-xs rounded-lg border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600"
-            />
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Phòng học</label>
-              <input
-                placeholder="VD: Phòng A-301"
-                value={newRoom}
-                onChange={(e) => setNewRoom(e.target.value)}
-                className="w-full px-3.5 py-2 text-xs rounded-lg border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Sĩ số tối đa</label>
-              <input
-                type="number"
-                value={newMaxStudents}
-                onChange={(e) => setNewMaxStudents(e.target.value)}
-                className="w-full px-3.5 py-2 text-xs rounded-lg border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Lịch học</label>
-            <input
-              placeholder="VD: Thứ 4 · 08:00 - 10:00"
-              value={newSchedule}
-              onChange={(e) => setNewSchedule(e.target.value)}
-              className="w-full px-3.5 py-2 text-xs rounded-lg border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Khoa quản lý</label>
-            <select
-              value={newDepartment}
-              onChange={(e) => setNewDepartment(e.target.value)}
-              className="w-full px-3.5 py-2 text-xs rounded-lg border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600 bg-white"
-            >
-              <option value="Khoa Công nghệ thông tin">Khoa Công nghệ thông tin</option>
-              <option value="Khoa Quản trị kinh doanh">Khoa Quản trị kinh doanh</option>
-              <option value="Khoa Thiết kế đồ họa">Khoa Thiết kế đồ họa</option>
-              <option value="Khoa Ngôn ngữ">Khoa Ngôn ngữ</option>
-            </select>
-          </div>
-
-          <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={() => setShowCreateModal(false)}
-              className="px-4 py-2 text-xs font-semibold rounded-lg text-slate-600 hover:bg-slate-100 transition"
-            >
-              Hủy
-            </button>
-            <button
-              type="submit"
-              className="px-4 py-2 text-xs font-semibold rounded-lg bg-teal-700 hover:bg-teal-800 text-white shadow-xs transition"
-            >
-              Lưu lớp học
-            </button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Modal: Danh sách sinh viên trong lớp */}
-      <Modal
-        isOpen={showRosterModal}
-        onClose={() => setShowRosterModal(false)}
-        title={selectedClass ? `Danh sách sinh viên · ${selectedClass.className} (${selectedClass.classId})` : 'Danh sách sinh viên'}
-      >
-        {selectedClass && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <span className="text-xs text-slate-500">
-                Tổng số: <b className="text-slate-800">{selectedClass.studentIds.length}</b> sinh viên đã ghi danh
-              </span>
-              {(isTeacher || isAdmin) && (
-                <button
-                  onClick={() => setShowAddStudentModal(true)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-teal-50 text-teal-700 hover:bg-teal-100 border border-teal-200 transition"
-                >
-                  <UserPlus size={14} /> Thêm sinh viên
-                </button>
-              )}
-            </div>
-
-            <div className="max-h-80 overflow-y-auto rounded-lg border border-slate-200 divide-y divide-slate-100">
-              {selectedClass.studentIds.length === 0 ? (
-                <div className="p-8 text-center text-xs text-slate-400">Chưa có sinh viên nào trong lớp này.</div>
-              ) : (
-                selectedClass.studentIds.map((sid) => {
-                  const stu = allStudents.find((s) => s.userId === sid)
-                  return (
-                    <div key={sid} className="p-3 flex items-center justify-between hover:bg-slate-50 transition">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-teal-100 text-teal-800 font-bold text-xs flex items-center justify-center">
-                          {stu ? stu.fullName.slice(-1) : 'S'}
-                        </div>
-                        <div>
-                          <div className="text-xs font-semibold text-slate-800">{stu ? stu.fullName : sid}</div>
-                          <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
-                            <span className="font-mono">{sid}</span>
-                            <span>·</span>
-                            {stu?.hasFaceRegistered ? (
-                              <span className="text-emerald-600 flex items-center gap-0.5">
-                                <CheckCircle2 size={11} /> Khuôn mặt OK
-                              </span>
-                            ) : (
-                              <span className="text-amber-600 flex items-center gap-0.5">
-                                <AlertCircle size={11} /> Chưa có mặt
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {(isTeacher || isAdmin) && (
-                        <button
-                          onClick={() => handleRemoveStudent(sid)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
-                          title="Xóa khỏi lớp"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      )}
-                    </div>
-                  )
-                })
-              )}
-            </div>
-          </div>
-        )}
-      </Modal>
-
-      {/* Modal: Thêm sinh viên vào lớp */}
-      <Modal isOpen={showAddStudentModal} onClose={() => setShowAddStudentModal(false)} title="Thêm sinh viên vào lớp">
-        <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Chọn sinh viên từ hệ thống</label>
-            <select
-              value={selectedStudentToAdd}
-              onChange={(e) => setSelectedStudentToAdd(e.target.value)}
-              className="w-full px-3.5 py-2 text-xs rounded-lg border border-slate-200 bg-white focus:outline-hidden focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600"
-            >
-              <option value="">-- Chọn sinh viên --</option>
-              {allStudents
-                .filter((s) => selectedClass && !selectedClass.studentIds.includes(s.userId))
-                .map((s) => (
-                  <option key={s.userId} value={s.userId}>
-                    {s.fullName} ({s.userId}) - {s.department}
-                  </option>
-                ))}
-            </select>
-          </div>
-
-          <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
-            <button
-              onClick={() => setShowAddStudentModal(false)}
-              className="px-4 py-2 text-xs font-semibold rounded-lg text-slate-600 hover:bg-slate-100 transition"
-            >
-              Hủy
-            </button>
-            <button
-              onClick={handleAddStudent}
-              disabled={!selectedStudentToAdd}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white shadow-xs transition"
-            >
-              <Users size={14} /> Thêm vào danh sách
-            </button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* Modal: Xác nhận xóa sinh viên khỏi lớp */}
-      <ConfirmModal
-        isOpen={Boolean(studentIdToRemove)}
-        title="Xác nhận xóa sinh viên khỏi lớp"
-        message={`Bạn có chắc chắn muốn xóa sinh viên ${studentIdToRemove} khỏi danh sách lớp "${selectedClass?.className}" (${selectedClass?.classId}) không?`}
-        confirmText="Xóa sinh viên"
-        cancelText="Hủy bỏ"
-        variant="danger"
-        onConfirm={executeRemoveStudent}
-        onCancel={() => setStudentIdToRemove(null)}
-      />
-    </div>
-  )
+function SemesterModal(props: { open:boolean; onClose:()=>void; semesters:Semester[]; editing:Semester|null; onEdit:(x:Semester)=>void; onDelete:(x:Semester)=>void; code:string; name:string; start:string; end:string; status:Semester['status']; setCode:(x:string)=>void; setName:(x:string)=>void; setStart:(x:string)=>void; setEnd:(x:string)=>void; setStatus:(x:Semester['status'])=>void; onSave:(e:React.FormEvent)=>void }) {
+  const { open,onClose,semesters,editing,onEdit,onDelete,code,name,start,end,status,setCode,setName,setStart,setEnd,setStatus,onSave }=props
+  return <Modal isOpen={open} onClose={onClose} title={editing?'Sửa học kỳ':'Quản lý học kỳ'} maxWidth="720px"><form onSubmit={onSave} className="grid gap-3 md:grid-cols-2"><label className="text-sm">Mã học kỳ<input required value={code} onChange={e=>setCode(e.target.value.toUpperCase())} className={field}/></label><label className="text-sm">Tên học kỳ<input required value={name} onChange={e=>setName(e.target.value)} className={field}/></label><label className="text-sm">Ngày bắt đầu<input required type="date" value={start} onChange={e=>setStart(e.target.value)} className={field}/></label><label className="text-sm">Ngày kết thúc<input required type="date" value={end} onChange={e=>setEnd(e.target.value)} className={field}/></label><label className="text-sm">Trạng thái<select value={status} onChange={e=>setStatus(e.target.value as Semester['status'])} className={field}><option value="PLANNED">Dự kiến</option><option value="ACTIVE">Đang hoạt động</option><option value="CLOSED">Đã đóng</option></select></label><div className="self-end"><button className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white">{editing?'Lưu thay đổi':'Tạo học kỳ'}</button></div></form><div className="mt-6 divide-y">{semesters.map(x=><div key={x.id} className="flex items-center justify-between py-3 text-sm"><div><b>{x.code} · {x.name}</b><p className="text-slate-500">{x.start_date} – {x.end_date} · {x.status}</p></div><div className="flex gap-3"><button onClick={()=>onEdit(x)} className="text-teal-700">Sửa</button><button onClick={()=>onDelete(x)} className="text-rose-600">Xóa</button></div></div>)}</div></Modal>
 }

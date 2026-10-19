@@ -36,6 +36,13 @@ class User(Base):
     refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
     audit_logs = relationship("AuditLog", back_populates="actor")
 
+    @property
+    def has_face_registered(self) -> bool:
+        if self.student_profile and self.student_profile.face_profiles:
+            from app.models.face import FaceProfileStatusEnum
+            return any(fp.status == FaceProfileStatusEnum.ACTIVE for fp in self.student_profile.face_profiles)
+        return False
+
 class Student(Base):
     __tablename__ = "students"
 
