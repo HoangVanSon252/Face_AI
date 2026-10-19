@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.api.dependencies import get_current_active_user, get_db, require_role
 from app.core.security import get_password_hash
 from app.crud.crud_user import revoke_all_user_tokens
+from app.models.course import ClassSection, Enrollment, EnrollmentStatusEnum
 from app.models.user import RoleEnum, User, UserStatusEnum
 from app.schemas.user import AdminPasswordReset, AdminUserResponse, AdminUserUpdate, UserCreate, UserResponse
 from app.services.audit_service import write_audit_log
@@ -37,16 +38,23 @@ def _ensure_last_admin_is_protected(db: Session, target: User, new_role: RoleEnu
             raise HTTPException(status_code=409, detail="Cannot remove or lock the last active admin")
 
 
-@router.get("/", response_model=list[AdminUserResponse], dependencies=[require_admin])
+@router.get("/", response_model=list[AdminUserResponse])
 def list_users(
     skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=50, ge=1, le=100),
+    limit: int = Query(default=50, ge=1, le=500),
     query: str | None = Query(default=None, max_length=100),
     role: RoleEnum | None = None,
     account_status: UserStatusEnum | None = Query(default=None, alias="status"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ):
     statement = db.query(User).options(joinedload(User.student_profile), joinedload(User.lecturer_profile))
+    if current_user.role == RoleEnum.STUDENT:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    if current_user.role == RoleEnum.LECTURER:
+        # Lecturers can resolve students to add them to class sections,
+        # but not administrators or other lecturers.
+        statement = statement.filter(or_(User.id == current_user.id, User.role == RoleEnum.STUDENT))
     if query:
         pattern = f"%{query.strip()}%"
         statement = statement.filter(or_(User.username.ilike(pattern), User.email.ilike(pattern), User.full_name.ilike(pattern)))
@@ -155,9 +163,12 @@ def get_user(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    if current_user.role != RoleEnum.ADMIN and current_user.id != user_id:
+    if current_user.role == RoleEnum.STUDENT and current_user.id != user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
-    return UserService.get_user_by_id(db=db, user_id=user_id)
+    target = UserService.get_user_by_id(db=db, user_id=user_id)
+    if current_user.role == RoleEnum.LECTURER and current_user.id != user_id and target.role != RoleEnum.STUDENT:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    return target
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

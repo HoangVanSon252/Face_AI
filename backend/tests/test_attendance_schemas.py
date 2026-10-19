@@ -26,3 +26,15 @@ def test_session_schema_accepts_valid_schedule():
         late_after_at=start + timedelta(minutes=15),
     )
     assert session.session_no == 1
+
+
+def test_session_schema_normalizes_iso_utc():
+    session = AttendanceSessionCreate(
+        session_no=None,
+        scheduled_start_at="2026-10-16T08:00:00Z",
+        scheduled_end_at="2026-10-16T10:00:00Z",
+        late_after_at="2026-10-16T08:15:00Z",
+    )
+    assert session.session_no is None
+    assert session.scheduled_start_at.hour == 8
+    assert session.scheduled_start_at.tzinfo is None

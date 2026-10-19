@@ -3,6 +3,7 @@ export type Role = 'student' | 'teacher' | 'admin'
 export type View =
   | 'Tổng quan'
   | 'Lớp học'
+  | 'Môn học'
   | 'Điểm danh'
   | 'Chi tiết phiên điểm danh'
   | 'Đăng ký khuôn mặt'
@@ -11,6 +12,7 @@ export type View =
   | 'Báo cáo'
   | 'Người dùng'
   | 'Nhật ký kiểm toán'
+  | 'Danh sách sinh viên lớp'
 
   | 'Project management'
 
@@ -23,6 +25,7 @@ export interface User {
   role: Role
   isActive: boolean
   department?: string
+  administrativeClass?: string
   hasFaceRegistered?: boolean
   avatar?: string
 }
@@ -56,18 +59,35 @@ export interface ClassItem {
   studentCount: number
   maxStudents: number
   studentIds: string[] // list of student userIds
+  courseId?: number
+  courseCode?: string
+}
+
+export interface Subject {
+  id: number
+  code: string
+  name: string
+  credits: number
+  isActive: boolean
 }
 
 export interface AttendanceSession {
   id: number
-  sessionId: string // e.g. SES-2026-0911
+  sectionId?: number
+  sessionNo?: number
+  sessionId: string // e.g. SES-IT308-1
+  title?: string
   classId: string
   className: string
   room: string
   startTime: string
   endTime: string
   lateAfter: string // e.g. "08:15"
-  status: 'active' | 'closed'
+  scheduledStartAt?: string // ISO UTC string
+  scheduledEndAt?: string // ISO UTC string
+  lateAfterAt?: string // ISO UTC string
+  rawStatus?: 'SCHEDULED' | 'OPEN' | 'CLOSED' | 'CANCELLED'
+  status: 'active' | 'closed' | 'scheduled' | 'cancelled'
   createdBy: number
   createdByName: string
   createdAt: string
@@ -86,6 +106,7 @@ export interface AttendanceLog {
   checkInTime: string
   confidenceScore: number // e.g. 94.5%
   status: 'present' | 'late' | 'absent'
+  lateMinutes?: number
   reviewStatus: 'approved' | 'pending' | 'rejected'
   capturedImage?: string
   livenessScore?: number

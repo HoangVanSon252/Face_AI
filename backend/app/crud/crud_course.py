@@ -1,3 +1,4 @@
+from datetime import datetime
 from sqlalchemy.orm import Session
 from app.models.course import (
     Semester, Course, ClassSection, Enrollment,
@@ -77,6 +78,27 @@ def get_section(db: Session, section_id: int) -> ClassSection | None:
 
 # ─── Enrollment ──────────────────────────────────
 def enroll_student(db: Session, data: EnrollmentCreate) -> Enrollment:
+    existing = (
+        db.query(Enrollment)
+        .filter(
+            Enrollment.section_id == data.section_id,
+            Enrollment.student_id == data.student_id,
+        )
+        .first()
+    )
+    if existing:
+        if existing.status == EnrollmentStatusEnum.ENROLLED:
+            raise APIException(
+                status_code=409,
+                code="ALREADY_ENROLLED",
+                message="Sinh viên đã đăng ký lớp học phần này.",
+            )
+        existing.status = EnrollmentStatusEnum.ENROLLED
+        existing.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(existing)
+        return existing
+
     try:
         obj = Enrollment(**data.model_dump())
         db.add(obj)
@@ -94,7 +116,10 @@ def enroll_student(db: Session, data: EnrollmentCreate) -> Enrollment:
 def get_enrollments_by_section(db: Session, section_id: int):
     return (
         db.query(Enrollment)
-        .filter(Enrollment.section_id == section_id)
+        .filter(
+            Enrollment.section_id == section_id,
+            Enrollment.status == EnrollmentStatusEnum.ENROLLED,
+        )
         .all()
     )
 

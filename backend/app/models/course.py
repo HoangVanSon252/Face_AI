@@ -15,6 +15,17 @@ class SectionStatusEnum(str, enum.Enum):
     CLOSED = "CLOSED"
     CANCELLED = "CANCELLED"
 
+
+class AdministrativeClass(Base):
+    __tablename__ = "administrative_classes"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    code = Column(String(50), unique=True, nullable=False)
+    name = Column(String(150), nullable=True)
+    department = Column(String(150), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+
 class EnrollmentStatusEnum(str, enum.Enum):
     ENROLLED = "ENROLLED"
     DROPPED = "DROPPED"
@@ -57,6 +68,7 @@ class Course(Base):
     )
 
     class_sections = relationship("ClassSection", back_populates="course")
+    class_links = relationship("SubjectClass", back_populates="course", cascade="all, delete-orphan")
 
 class ClassSection(Base):
     __tablename__ = "class_sections"
@@ -83,7 +95,24 @@ class ClassSection(Base):
     # Liên kết với Lecturer bên user.py
     lecturer = relationship("Lecturer", back_populates="assigned_sections", primaryjoin="ClassSection.lecturer_id == Lecturer.user_id")
     enrollments = relationship("Enrollment", back_populates="section", cascade="all, delete-orphan")
+    subject_links = relationship("SubjectClass", back_populates="section", cascade="all, delete-orphan")
     # sessions điểm danh sẽ thêm ở bước sau
+
+class SubjectClass(Base):
+    __tablename__ = "subject_classes"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    course_id = Column(BigInteger, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False)
+    section_id = Column(BigInteger, ForeignKey("class_sections.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint('course_id', 'section_id', name='uk_subject_classes_course_section'),
+    )
+
+    course = relationship("Course", back_populates="class_links")
+    section = relationship("ClassSection", back_populates="subject_links")
+
 
 class Enrollment(Base):
     __tablename__ = "enrollments"

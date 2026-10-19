@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.api import dependencies
 from app.models.audit import AuditLog
-from app.models.user import RoleEnum
+from app.models.user import RoleEnum, User
 from app.schemas.audit import AuditLogResponse
 
 router = APIRouter()
@@ -14,10 +14,15 @@ def list_audit_logs(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=100),
     db: Session = Depends(dependencies.get_db),
-    _=Depends(dependencies.require_role([RoleEnum.ADMIN.value])),
+    current_user: User = Depends(dependencies.get_current_active_user),
 ):
+    query = db.query(AuditLog)
+    # Administrators can inspect the complete system audit trail. Other users
+    # can inspect their own security/activity trail without seeing other users.
+    if current_user.role != RoleEnum.ADMIN:
+        query = query.filter(AuditLog.actor_user_id == current_user.id)
     return (
-        db.query(AuditLog)
+        query
         .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)

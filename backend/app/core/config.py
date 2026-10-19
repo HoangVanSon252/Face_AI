@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     FACE_MAX_SAMPLES: int = 5
     FACE_MIN_QUALITY_SCORE: float = 0.65
     FACE_MATCH_THRESHOLD: float = 0.55
+    # InsightFace cosine scores around 0.80 are stable matches in this
+    # deployment; lower scores remain in the teacher review queue.
+    FACE_AUTO_APPROVE_THRESHOLD: float = 0.80
 
     @field_validator("DEBUG", mode="before")
     @classmethod

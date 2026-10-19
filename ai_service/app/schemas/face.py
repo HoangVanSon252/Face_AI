@@ -8,6 +8,9 @@ class ImageRequest(BaseModel):
 class FaceDetection(BaseModel):
     bbox: list[float] = Field(min_length=4, max_length=4)
     confidence: float = Field(ge=0, le=1)
+    # InsightFace five-point landmarks: left eye, right eye, nose and mouth
+    # corners. They let the client validate real head rotation, not movement.
+    landmarks: list[list[float]] = Field(default_factory=list)
 
 
 class DetectResponse(BaseModel):

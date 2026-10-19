@@ -39,8 +39,10 @@ def create_manual_check_in(
     if not crud_attendance.is_enrolled(db, session.section_id, data.student_id):
         raise HTTPException(status_code=403, detail="Student is not enrolled in this section")
     try:
+        # Manual attendance uses the server clock as the authoritative time;
+        # this prevents a browser from backdating a late check-in.
         record = crud_attendance.create_manual_check_in(
-            db, session, data.student_id, data.check_in_at or datetime.utcnow(), data.note
+            db, session, data.student_id, datetime.utcnow(), data.note
         )
         write_audit_log(
             db, action="ATTENDANCE_CREATED", actor_user_id=current_user.id,

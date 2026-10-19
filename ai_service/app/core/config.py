@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +14,16 @@ class Settings(BaseSettings):
 
     PROJECT_NAME: str = "EduFace AI Service"
     API_V1_STR: str = "/api/v1"
+    ENVIRONMENT: str = "development"
+    DEBUG: bool = True
+
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def parse_debug(cls, v):
+        if isinstance(v, str):
+            return v.lower() in ("1", "true", "yes", "debug", "dev", "development")
+        return bool(v)
+
     MODEL_PROVIDERS: str = "CPUExecutionProvider"
     DETECTION_SIZE: int = 640
 

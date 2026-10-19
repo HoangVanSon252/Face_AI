@@ -54,6 +54,8 @@ npm-debug.log
 yarn-error.log
 yarn-debug.log
 *.log
+test-results/
+playwright-report/
 
 # ==========================================
 # THƯ MỤC UPLOAD/MEDIA

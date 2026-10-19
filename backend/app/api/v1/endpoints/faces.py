@@ -12,7 +12,7 @@ from app.models.attendance import AttendanceRecord, AttendanceStatusEnum, Review
 from app.models.face import FaceEmbedding, FaceProfile, FaceProfileStatusEnum
 from app.models.user import RoleEnum, Student
 from app.schemas.face import EvidenceUrlResponse, FaceProfileCreate, FaceProfileResponse, RecognitionRequest, RecognitionResponse
-from app.services.ai_client import check_liveness, extract_embedding
+from app.services.ai_client import check_liveness, extract_embedding, detect_faces_fast
 from app.services.audit_service import write_audit_log
 from app.services.realtime import realtime_service
 from app.services.object_storage import create_download_url, upload_attendance_evidence
@@ -65,6 +65,40 @@ async def enroll_face_profile(student_id: int, data: FaceProfileCreate, db: Sess
     return _profile_response(profile)
 
 
+@router.get("/students/me/face-profile", response_model=FaceProfileResponse)
+def get_my_face_profile(
+    db: Session = Depends(dependencies.get_db),
+    current_user=Depends(dependencies.get_current_active_user),
+):
+    profile = (
+        db.query(FaceProfile)
+        .options(joinedload(FaceProfile.embeddings))
+        .filter(FaceProfile.student_id == current_user.id, FaceProfile.status == FaceProfileStatusEnum.ACTIVE)
+        .first()
+    )
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Active face profile not found")
+    return _profile_response(profile)
+
+
+@router.post("/face/detect-frame")
+def detect_frame(
+    data: RecognitionRequest,
+    current_user=Depends(dependencies.get_current_active_user),
+):
+    """Fast frame check for auto-capture hands-free guidance."""
+    res = detect_faces_fast(data.image_base64)
+    face_count = int(res.get("face_count", 0))
+    faces = res.get("faces", [])
+    confidence = max([float(f.get("confidence", 0.0)) for f in faces], default=0.0) if faces else 0.0
+    return {
+        "detected": face_count > 0,
+        "face_count": face_count,
+        "confidence": round(confidence, 4),
+        "faces": faces,
+    }
+
+
 @router.get("/students/{student_id}/face-profile", response_model=FaceProfileResponse)
 def get_face_profile(student_id: int, db: Session = Depends(dependencies.get_db), current_user=Depends(dependencies.get_current_active_user)):
     dependencies.require_student_access(db, student_id, current_user)
@@ -101,8 +135,30 @@ async def recognize(session_id: int, data: RecognitionRequest, db: Session = Dep
     session = dependencies.require_session_access(db, session_id, current_user)
     if session.status != SessionStatusEnum.OPEN:
         raise HTTPException(status_code=409, detail="Attendance session is not open")
-    result = extract_embedding(data.image_base64)
-    liveness = check_liveness(data.image_base64)
+    try:
+        result = extract_embedding(data.image_base64)
+    except HTTPException as exc:
+        if exc.status_code == 422:
+            return RecognitionResponse(
+                matched=False,
+                quality_score=0.0,
+                review_required=False,
+                reason=exc.detail or "No face detected in frame",
+            )
+        raise
+
+    try:
+        liveness = check_liveness(data.image_base64)
+    except HTTPException as exc:
+        if exc.status_code == 422:
+            return RecognitionResponse(
+                matched=False,
+                quality_score=float(result.get("quality_score", 0.0)),
+                review_required=False,
+                reason=exc.detail or "Liveness verification could not isolate face",
+            )
+        raise
+
     liveness_score = float(liveness["score"])
     if not liveness.get("is_live"):
         return RecognitionResponse(
@@ -120,17 +176,35 @@ async def recognize(session_id: int, data: RecognitionRequest, db: Session = Dep
     confidence, student_id = best
     if not crud_attendance.is_enrolled(db, session.section_id, student_id):
         return RecognitionResponse(matched=False, quality_score=quality, review_required=True, reason="Matched student is not enrolled")
+
+    already_checked_in = (
+        db.query(AttendanceRecord.id)
+        .filter(
+            AttendanceRecord.session_id == session_id,
+            AttendanceRecord.student_id == student_id,
+        )
+        .first()
+    )
+    if already_checked_in:
+        raise HTTPException(status_code=409, detail="Student has already checked in")
+
     # Store evidence only for a matched, enrolled student; never retain every webcam frame.
     evidence_uri, _checksum = upload_attendance_evidence(session_id, data.image_base64)
+    auto_approved = confidence >= settings.FACE_AUTO_APPROVE_THRESHOLD
+    checked_in_at = datetime.utcnow()
+    try:
+        attendance_status = crud_attendance.attendance_status_for_check_in(session, checked_in_at)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     record = AttendanceRecord(
         session_id=session_id,
         student_id=student_id,
-        status=AttendanceStatusEnum.LATE if datetime.utcnow() > session.late_after_at else AttendanceStatusEnum.PRESENT,
+        status=attendance_status,
         verification_method=VerificationMethodEnum.FACE,
-        check_in_at=datetime.utcnow(),
+        check_in_at=checked_in_at,
         confidence_score=confidence,
         liveness_score=liveness_score,
-        review_status=ReviewStatusEnum.PENDING,
+        review_status=ReviewStatusEnum.AUTO_APPROVED if auto_approved else ReviewStatusEnum.PENDING,
         evidence_image_uri=evidence_uri,
     )
     db.add(record)
@@ -140,5 +214,5 @@ async def recognize(session_id: int, data: RecognitionRequest, db: Session = Dep
         db.rollback()
         raise HTTPException(status_code=409, detail="Student has already checked in")
     db.refresh(record)
-    await realtime_service.publish(session_id, "attendance_detected", {"record_id": record.id, "student_id": student_id, "status": record.status.value, "confidence_score": confidence, "review_required": True})
-    return RecognitionResponse(matched=True, student_id=student_id, attendance_record_id=record.id, confidence_score=confidence, quality_score=quality, review_required=True)
+    await realtime_service.publish(session_id, "attendance_detected", {"record_id": record.id, "student_id": student_id, "status": record.status.value, "confidence_score": confidence, "review_required": not auto_approved})
+    return RecognitionResponse(matched=True, student_id=student_id, attendance_record_id=record.id, confidence_score=confidence, quality_score=quality, review_required=not auto_approved)

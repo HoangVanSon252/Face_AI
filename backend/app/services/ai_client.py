@@ -41,3 +41,18 @@ def check_liveness(image_base64: str) -> dict[str, Any]:
         return response.json()
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI service is unavailable") from exc
+
+
+def detect_faces_fast(image_base64: str) -> dict[str, Any]:
+    """Fast face detector query for live webcam frame alignment check."""
+    try:
+        with httpx.Client(timeout=8.0) as client:
+            response = client.post(
+                f"{settings.AI_SERVICE_URL.rstrip('/')}/api/v1/face/detect",
+                json={"image_base64": image_base64},
+            )
+        if response.status_code == 200:
+            return response.json()
+        return {"face_count": 0, "faces": []}
+    except Exception:
+        return {"face_count": 0, "faces": []}

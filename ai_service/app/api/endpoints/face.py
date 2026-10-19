@@ -37,6 +37,10 @@ def detect(request: ImageRequest) -> DetectResponse:
             FaceDetection(
                 bbox=[round(float(value), 2) for value in face.bbox],
                 confidence=round(float(face.det_score), 4),
+                landmarks=[
+                    [round(float(point[0]), 2), round(float(point[1]), 2)]
+                    for point in getattr(face, "kps", [])
+                ],
             )
             for face in faces
         ],
@@ -94,5 +98,5 @@ def liveness(request: ImageRequest) -> LivenessResponse:
         available=is_configured,
         is_live=is_live,
         score=score,
-        reason=None if is_configured else "Evaluated via face detection heuristic (ONNX model file not configured)",
+        reason=None if is_configured else "Development heuristic; configure LIVENESS_MODEL_PATH for production",
     )

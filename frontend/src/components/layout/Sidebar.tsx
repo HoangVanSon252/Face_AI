@@ -30,18 +30,24 @@ const NAV_ITEMS_BY_ROLE: Record<Role, NavItem[]> = {
     { label: 'Đăng ký khuôn mặt', icon: Camera },
     { label: 'Lịch sử điểm danh', icon: CalendarCheck },
     { label: 'Khiếu nại', icon: ShieldCheck },
+    { label: 'Nhật ký kiểm toán', icon: FileBarChart },
   ],
   teacher: [
     { label: 'Tổng quan', icon: LayoutDashboard },
+    { label: 'Môn học', icon: BookOpen },
     { label: 'Lớp học', icon: BookOpen },
     { label: 'Điểm danh', icon: CalendarCheck },
     { label: 'Khiếu nại', icon: ShieldCheck },
     { label: 'Báo cáo', icon: FileBarChart },
+    { label: 'Nhật ký kiểm toán', icon: ShieldCheck },
   ],
   admin: [
     { label: 'Tổng quan', icon: LayoutDashboard },
     { label: 'Người dùng', icon: Users },
+    { label: 'Môn học', icon: BookOpen },
     { label: 'Lớp học', icon: BookOpen },
+    { label: 'Điểm danh', icon: CalendarCheck },
+    { label: 'Khiếu nại', icon: ShieldCheck },
     { label: 'Báo cáo', icon: FileBarChart },
     { label: 'Nhật ký kiểm toán', icon: ShieldCheck },
   ],
@@ -77,7 +83,7 @@ export function Sidebar({
 
   // AI Parameters Modal State (Thay thế alert bằng Modal chuyên nghiệp)
   const [showAiModal, setShowAiModal] = useState(false)
-  const [autoApproveScore, setAutoApproveScore] = useState(85)
+  const [autoApproveScore, setAutoApproveScore] = useState(80)
   const [reviewScore, setReviewScore] = useState(60)
   const [livenessScore, setLivenessScore] = useState(80)
   const [savedSuccess, setSavedSuccess] = useState(false)
@@ -186,7 +192,7 @@ export function Sidebar({
               <p className="text-[11px] font-bold text-[#0f6b62]">Quy trình Face AI</p>
             </div>
             <p className="text-[10.5px] text-[#4a7971] leading-relaxed">
-              Nhận diện realtime · InsightFace 512D · Auto &ge;85%
+              Nhận diện realtime · InsightFace 512D · Auto &ge;80%
             </p>
           </div>
 

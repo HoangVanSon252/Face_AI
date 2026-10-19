@@ -55,6 +55,13 @@ export class UserWebSocketClient {
                 detail: { role: data.payload.role },
               })
             )
+          } else if (data.event === 'CLASS_ROSTER_CHANGED') {
+            window.dispatchEvent(
+              new CustomEvent('class-roster:changed', { detail: data.payload })
+            )
+            window.dispatchEvent(
+              new CustomEvent('data:changed', { detail: { source: 'websocket', event: data.event, payload: data.payload } })
+            )
           }
         } catch {
           // Ignore unparseable message

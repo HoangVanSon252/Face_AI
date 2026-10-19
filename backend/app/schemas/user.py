@@ -64,6 +64,7 @@ class UserResponse(BaseModel):
     status: UserStatusEnum
     student_profile: Optional[StudentProfileResponse] = None
     lecturer_profile: Optional[LecturerProfileResponse] = None
+    has_face_registered: bool = False
     model_config = ConfigDict(from_attributes=True)
 
 

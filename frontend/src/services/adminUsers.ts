@@ -10,7 +10,8 @@ interface BackendUser {
   full_name: string
   role: BackendRole
   status: 'ACTIVE' | 'INACTIVE' | 'LOCKED'
-  student_profile?: { student_code: string; major?: string }
+  has_face_registered?: boolean
+  student_profile?: { student_code: string; major?: string; administrative_class?: string }
   lecturer_profile?: { lecturer_code: string; department?: string }
 }
 
@@ -27,7 +28,8 @@ const toFrontendUser = (user: BackendUser): User => {
     role,
     isActive: user.status === 'ACTIVE',
     department: user.student_profile?.major || user.lecturer_profile?.department,
-    hasFaceRegistered: false,
+    administrativeClass: user.student_profile?.administrative_class,
+    hasFaceRegistered: Boolean(user.has_face_registered),
     avatar: avatar || 'ND',
   }
 }

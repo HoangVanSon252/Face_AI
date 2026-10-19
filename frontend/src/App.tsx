@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Play } from 'lucide-react'
 import type { Role, View, User, AttendanceLog, AttendanceSession, ClassItem } from './types'
-import { authService, attendanceService, sessionService, classService } from './services/api'
+import { authService, attendanceService, sessionService, classService, faceService } from './services/api'
 import { ToastProvider, useToast } from './components/common/Toast'
 import { Sidebar } from './components/layout/Sidebar'
 import { Topbar } from './components/layout/Topbar'
@@ -12,6 +12,8 @@ import { TeacherDashboard } from './pages/dashboard/TeacherDashboard'
 import { StudentDashboard } from './pages/dashboard/StudentDashboard'
 import { AdminDashboard } from './pages/dashboard/AdminDashboard'
 import { ClassManagement } from './pages/classes/ClassManagement'
+import { StudentClassList } from './pages/classes/StudentClassList'
+import { ClassRosterView } from './pages/classes/ClassRosterView'
 import { LiveSessionView } from './pages/attendance/LiveSessionView'
 import { FaceRegistrationView } from './pages/attendance/FaceRegistrationView'
 import { AttendanceHistoryView } from './pages/history/AttendanceHistoryView'
@@ -41,9 +43,26 @@ function MainApp() {
   const [activeSession, setActiveSession] = useState<AttendanceSession | undefined>(undefined)
   const [showCreateSessionModal, setShowCreateSessionModal] = useState(false)
   const [availableClasses, setAvailableClasses] = useState<ClassItem[]>([])
-  const [selectedClassIdToOpen, setSelectedClassIdToOpen] = useState('IT308')
+  const [selectedClassIdToOpen, setSelectedClassIdToOpen] = useState('')
   const [mobileMenu, setMobileMenu] = useState(false)
   const [pendingLogs, setPendingLogs] = useState<AttendanceLog[]>([])
+  const [selectedRosterClass, setSelectedRosterClass] = useState<ClassItem | null>(null)
+  const [dataVersion, setDataVersion] = useState(0)
+
+  const [quickStartTime, setQuickStartTime] = useState(() => {
+    const d = new Date()
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  })
+  const [quickEndTime, setQuickEndTime] = useState(() => {
+    const d = new Date()
+    return `${String((d.getHours() + 2) % 24).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  })
+  const [quickLateAfter, setQuickLateAfter] = useState(() => {
+    const d = new Date()
+    const m = d.getMinutes() + 15
+    const h = (d.getHours() + Math.floor(m / 60)) % 24
+    return `${String(h).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+  })
 
   // Fetch pending review logs, check auth and load classes
   const refreshLogs = async () => {
@@ -55,8 +74,13 @@ function MainApp() {
     const restoreSession = async () => {
       const user = await authService.getMe()
       if (user) {
-        setCurrentUser(user)
-        setRole(user.role)
+        let finalUser = user
+        if (user.role === 'student') {
+          const profile = await faceService.getFaceProfile(user.id)
+          finalUser = { ...user, hasFaceRegistered: Boolean(profile && profile.status === 'ACTIVE') }
+        }
+        setCurrentUser(finalUser)
+        setRole(finalUser.role)
         refreshLogs()
         const [classes, sessions] = await Promise.all([
           classService.getClasses(),
@@ -71,6 +95,31 @@ function MainApp() {
       setIsRestoringSession(false)
     }
     void restoreSession()
+  }, [])
+
+  // All successful CRUD mutations emit data:changed from the HTTP client.
+  // Re-mounting the active data view is intentional: each page owns its query
+  // lifecycle, so it re-reads the persisted API state rather than retaining a
+  // second, manually synchronised client-side copy.
+  useEffect(() => {
+    const refreshAfterMutation = () => {
+      setDataVersion((version) => version + 1)
+      void refreshLogs()
+      void (async () => {
+        const [classes, sessions] = await Promise.all([
+          classService.getClasses(),
+          sessionService.getSessions(),
+        ])
+        setAvailableClasses(classes)
+        if (classes.length > 0) setSelectedClassIdToOpen(classes[0].classId)
+        const openSession = sessions.find((item) => item.status === 'active')
+        setActiveSession(openSession)
+        setSessionOpen(Boolean(openSession))
+      })()
+    }
+
+    window.addEventListener('data:changed', refreshAfterMutation)
+    return () => window.removeEventListener('data:changed', refreshAfterMutation)
   }, [])
 
   const handleLogout = async () => {
@@ -115,8 +164,13 @@ function MainApp() {
   }, [currentUser, showToast])
 
   const handleLoginSuccess = async (user: User) => {
-    setCurrentUser(user)
-    setRole(user.role)
+    let finalUser = user
+    if (user.role === 'student') {
+      const profile = await faceService.getFaceProfile(user.id)
+      finalUser = { ...user, hasFaceRegistered: Boolean(profile && profile.status === 'ACTIVE') }
+    }
+    setCurrentUser(finalUser)
+    setRole(finalUser.role)
     const [classes, sessions] = await Promise.all([
       classService.getClasses(),
       sessionService.getSessions(),
@@ -156,9 +210,9 @@ function MainApp() {
         classId: targetClass.classId,
         className: targetClass.className,
         room: targetClass.room,
-        startTime: '08:00',
-        endTime: '10:00',
-        lateAfter: '08:15',
+        startTime: quickStartTime,
+        endTime: quickEndTime,
+        lateAfter: quickLateAfter,
         teacherId: currentUser.id,
         teacherName: currentUser.fullName,
       })
@@ -196,7 +250,13 @@ function MainApp() {
       {/* Sidebar */}
       <Sidebar
         activeView={activeView}
-        onSelectView={(v) => setActiveView(v)}
+        onSelectView={(v) => {
+          if (role === 'teacher' && v === 'Điểm danh' && sessionOpen && activeSession) {
+            setActiveView('Chi tiết phiên điểm danh')
+            return
+          }
+          setActiveView(v)
+        }}
         role={role}
         currentUser={currentUser}
         mobileOpen={mobileMenu}
@@ -262,6 +322,7 @@ function MainApp() {
           {/* View Routing */}
           {activeView === 'Tổng quan' && role === 'teacher' && (
             <TeacherDashboard
+              key={`teacher-dashboard-${dataVersion}`}
               currentUser={currentUser}
               pendingLogs={pendingLogs}
               onApproveLog={async (id) => {
@@ -285,6 +346,7 @@ function MainApp() {
 
           {activeView === 'Tổng quan' && role === 'student' && (
             <StudentDashboard
+              key={`student-dashboard-${dataVersion}`}
               currentUser={currentUser}
               onGoToFaceRegistration={() => setActiveView('Đăng ký khuôn mặt')}
               onGoToComplaints={() => setActiveView('Khiếu nại')}
@@ -293,18 +355,59 @@ function MainApp() {
 
           {activeView === 'Tổng quan' && role === 'admin' && (
             <AdminDashboard
+              key={`admin-dashboard-${dataVersion}`}
               onGoToUsers={() => setActiveView('Người dùng')}
               onGoToAuditLogs={() => setActiveView('Nhật ký kiểm toán')}
             />
           )}
 
+          {activeView === 'Môn học' && (
+            <ClassManagement
+              key={`classes-${dataVersion}`}
+              role={role}
+              currentUser={currentUser}
+              onStartAttendance={(classId, session) => {
+                if (session) {
+                  setActiveSession(session)
+                  setSessionOpen(true)
+                  setActiveView('Chi tiết phiên điểm danh')
+                  return
+                }
+                if (sessionOpen && activeSession && activeSession.classId === classId) {
+                  setActiveView('Chi tiết phiên điểm danh')
+                } else {
+                  setSelectedClassIdToOpen(classId)
+                  setShowCreateSessionModal(true)
+                }
+              }}
+              onOpenClassRoster={(classItem) => {
+                setSelectedRosterClass(classItem)
+                setActiveView('Danh sách sinh viên lớp')
+              }}
+            />
+          )}
+
           {activeView === 'Lớp học' && (
-            <ClassManagement role={role} currentUser={currentUser} />
+            <StudentClassList
+              key={`student-classes-${dataVersion}`}
+              role={role}
+            />
+          )}
+
+          {activeView === 'Danh sách sinh viên lớp' && selectedRosterClass && (
+            <ClassRosterView
+              key={`class-roster-${selectedRosterClass.id}-${dataVersion}`}
+              classItem={selectedRosterClass}
+              role={role}
+              onBack={() => setActiveView('Lớp học')}
+            />
           )}
 
           {activeView === 'Chi tiết phiên điểm danh' && (
             <LiveSessionView
+              key={`live-session-${dataVersion}`}
               session={activeSession}
+              canOperate={role !== 'student'}
               onCloseSession={() => {
                 setSessionOpen(false)
                 setActiveSession(undefined)
@@ -314,11 +417,25 @@ function MainApp() {
           )}
 
           {(activeView === 'Điểm danh' || activeView === 'Lịch sử điểm danh') && (
-            <AttendanceHistoryView role={role} currentUser={currentUser} />
+            <AttendanceHistoryView
+              key={`history-${dataVersion}`}
+              role={role}
+              currentUser={currentUser}
+              onOpenLiveSession={() => {
+                if (sessionOpen && activeSession) {
+                  setActiveView('Chi tiết phiên điểm danh')
+                } else {
+                  setShowCreateSessionModal(true)
+                }
+              }}
+              hasActiveSession={Boolean(sessionOpen && activeSession)}
+              activeSessionInfo={activeSession ? `${activeSession.className} (${activeSession.classId} · ${activeSession.room})` : undefined}
+            />
           )}
 
           {activeView === 'Đăng ký khuôn mặt' && (
             <FaceRegistrationView
+              key={`face-registration-${dataVersion}`}
               role={role}
               currentUser={currentUser}
               onRegistrationComplete={() => {
@@ -328,19 +445,19 @@ function MainApp() {
           )}
 
           {activeView === 'Khiếu nại' && (
-            <ComplaintView role={role} currentUser={currentUser} />
+            <ComplaintView key={`complaints-${dataVersion}`} role={role} currentUser={currentUser} />
           )}
 
           {activeView === 'Báo cáo' && (
-            <ReportView role={role} />
+            <ReportView key={`reports-${dataVersion}`} role={role} />
           )}
 
           {activeView === 'Người dùng' && (
-            <UserManagementView currentUser={currentUser} onUserUpdated={(u) => setCurrentUser(u)} />
+            <UserManagementView key={`users-${dataVersion}`} currentUser={currentUser} onUserUpdated={(u) => setCurrentUser(u)} />
           )}
 
           {activeView === 'Nhật ký kiểm toán' && (
-            <AuditLogView />
+            <AuditLogView key={`audit-${dataVersion}`} />
           )}
         </div>
       </main>
@@ -394,6 +511,42 @@ function MainApp() {
                     </div>
                   </div>
                 )}
+
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Giờ bắt đầu</label>
+                    <input
+                      type="time"
+                      value={quickStartTime}
+                      onChange={(e) => setQuickStartTime(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white font-mono text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Giờ kết thúc</label>
+                    <input
+                      type="time"
+                      value={quickEndTime}
+                      onChange={(e) => setQuickEndTime(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white font-mono text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Mốc tính muộn (Sau mốc này sẽ tính ĐI TRỄ)
+                  </label>
+                  <input
+                    type="time"
+                    value={quickLateAfter}
+                    onChange={(e) => setQuickLateAfter(e.target.value)}
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white font-mono text-xs"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-0.5">
+                    * So sánh thời gian thực: Điểm danh sau mốc này sẽ lưu trạng thái Đi trễ.
+                  </p>
+                </div>
 
                 {isAlreadyActive ? (
                   <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg">

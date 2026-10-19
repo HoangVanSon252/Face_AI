@@ -1,6 +1,5 @@
-"""
-End-to-End Smoke Test Script for Face AI Attendance System
-Runs complete verification across all microservices:
+"""End-to-End Smoke Test Script for Face AI Attendance System
+Runs complete verification across all microservices and real-world edge cases:
 1. OpenAPI specification contract (/openapi.json, /api/v1/openapi.json)
 2. Student authentication & JWT issuance
 3. Face profile enrollment with multiple real face samples (512-dim InsightFace)
@@ -10,15 +9,68 @@ Runs complete verification across all microservices:
 7. Attendance session creation, conflict check, and opening
 8. AI-powered real-time facial recognition matching
 9. Object storage (SeaweedFS / S3) biometric evidence upload & presigned URL verification
+10. Real-world edge cases:
+    - 10.1: Duplicate recognition prevention (409 Conflict)
+    - 10.2: Recognition rejection on closed sessions (409 Conflict)
+    - 10.3: Unauthorized access prevention (401 Unauthorized)
 """
 import base64
+import json
 import os
 import sys
-import cv2
-import insightface
+from pathlib import Path
 import requests
 
-BASE_URL = os.environ.get("BASE_URL", "http://backend:8000")
+if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+
+def get_base_url() -> str:
+    if "BASE_URL" in os.environ:
+        return os.environ["BASE_URL"]
+    for url in ["http://localhost:8001", "http://backend:8000", "http://localhost"]:
+        try:
+            r = requests.get(f"{url}/health", timeout=1)
+            if r.status_code == 200:
+                return url
+        except Exception:
+            continue
+    return "http://localhost:8001"
+
+BASE_URL = get_base_url()
+
+
+def get_face_samples() -> tuple[str, str, str]:
+    sample_file = Path(__file__).resolve().parent / "sample_faces.json"
+    try:
+        import cv2
+        import insightface
+        print("Extracting face samples via InsightFace buffalo_l dataset...")
+        img = insightface.data.get_image("t1")
+        x1, y1, x2, y2 = 466, 268, 574, 416
+        crop1 = img[max(0, y1-80):min(img.shape[0], y2+80), max(0, x1-80):min(img.shape[1], x2+80)]
+        crop2 = img[max(0, y1-75):min(img.shape[0], y2+75), max(0, x1-75):min(img.shape[1], x2+75)]
+        crop3 = img[max(0, y1-85):min(img.shape[0], y2+85), max(0, x1-85):min(img.shape[1], x2+85)]
+
+        def to_b64(cv_img):
+            _, buf = cv2.imencode(".jpg", cv_img)
+            return "data:image/jpeg;base64," + base64.b64encode(buf).decode("utf-8")
+
+        b64_1 = to_b64(crop1)
+        b64_2 = to_b64(crop2)
+        b64_3 = to_b64(crop3)
+        try:
+            sample_file.write_text(json.dumps([b64_1, b64_2, b64_3]))
+        except Exception:
+            pass
+        return b64_1, b64_2, b64_3
+    except Exception as exc:
+        if sample_file.exists():
+            print(f"Loading cached face samples from {sample_file} (fallback: {exc})...")
+            samples = json.loads(sample_file.read_text())
+            return samples[0], samples[1], samples[2]
+        raise RuntimeError(f"Could not load face samples: {exc}. Install cv2 and insightface or provide sample_faces.json.") from exc
 
 
 def main():
@@ -54,19 +106,7 @@ def main():
 
     # 3. Generate Face Samples for Enrollment
     print("\n--- 3. Preparing Face Samples ---")
-    img = insightface.data.get_image("t1")
-    x1, y1, x2, y2 = 466, 268, 574, 416
-    crop1 = img[max(0, y1-80):min(img.shape[0], y2+80), max(0, x1-80):min(img.shape[1], x2+80)]
-    crop2 = img[max(0, y1-75):min(img.shape[0], y2+75), max(0, x1-75):min(img.shape[1], x2+75)]
-    crop3 = img[max(0, y1-85):min(img.shape[0], y2+85), max(0, x1-85):min(img.shape[1], x2+85)]
-
-    def to_b64(cv_img):
-        _, buf = cv2.imencode(".jpg", cv_img)
-        return "data:image/jpeg;base64," + base64.b64encode(buf).decode("utf-8")
-
-    b64_1 = to_b64(crop1)
-    b64_2 = to_b64(crop2)
-    b64_3 = to_b64(crop3)
+    b64_1, b64_2, b64_3 = get_face_samples()
 
     # 4. Enroll Face Profile
     print("\n--- 4. Enrolling Face Profile for Student ---")
@@ -196,9 +236,9 @@ def main():
         json={
             "session_no": next_session_no,
             "title": f"Buoi {next_session_no}",
-            "scheduled_start_at": "2026-10-13T08:00:00",
-            "scheduled_end_at": "2026-10-13T23:59:00",
-            "late_after_at": "2026-10-13T23:50:00"
+            "scheduled_start_at": "2026-10-15T08:00:00",
+            "scheduled_end_at": "2026-10-15T23:59:00",
+            "late_after_at": "2026-10-15T23:50:00"
         }
     )
     assert session_res.status_code == 201, f"Create session failed: {session_res.text}"
@@ -210,6 +250,7 @@ def main():
         headers={"Authorization": f"Bearer {teacher_token}"}
     )
     print(f"Open session status: {open_res.status_code}")
+    assert open_res.status_code == 200
 
     # 9. Perform Face Recognition Attendance
     print("\n--- 9. Face Recognition Attendance Test ---")
@@ -238,11 +279,46 @@ def main():
     assert "url" in ev_data
     print(f"Evidence presigned URL: {ev_data['url']}")
 
+    # 11. Real-World Edge Case Verification
+    print("\n--- 11. Real-World Edge Case Verification ---")
+
+    # 11.1 Duplicate Check-in in Same Session
+    print("Test 11.1: Duplicate check-in rejection")
+    dup_res = requests.post(
+        f"{BASE_URL}/api/v1/sessions/{session_id}/recognitions",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+        json={"image_base64": b64_1}
+    )
+    print(f"Duplicate status: {dup_res.status_code} (expected 409)")
+    assert dup_res.status_code == 409, f"Expected 409 Conflict, got {dup_res.status_code}"
+
+    # 11.2 Check-in on Closed Session
+    print("Test 11.2: Check-in on closed session rejection")
+    requests.post(
+        f"{BASE_URL}/api/v1/sessions/{session_id}/close",
+        headers={"Authorization": f"Bearer {teacher_token}"}
+    )
+    closed_res = requests.post(
+        f"{BASE_URL}/api/v1/sessions/{session_id}/recognitions",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+        json={"image_base64": b64_1}
+    )
+    print(f"Closed session status: {closed_res.status_code} (expected 409)")
+    assert closed_res.status_code == 409, f"Expected 409 Conflict, got {closed_res.status_code}"
+
+    # 11.3 Unauthorized / Expired Token Rejection
+    print("Test 11.3: Invalid token rejection")
+    unauth_res = requests.get(
+        f"{BASE_URL}/api/v1/auth/me",
+        headers={"Authorization": "Bearer invalid_expired_jwt_token_12345"}
+    )
+    print(f"Invalid token status: {unauth_res.status_code} (expected 401)")
+    assert unauth_res.status_code == 401, f"Expected 401, got {unauth_res.status_code}"
+
     print("\n=======================================================")
-    print("=== ALL E2E SMOKE TESTS PASSED PERFECTLY (10/10)! ===")
+    print("=== ALL E2E SMOKE & EDGE TESTS PASSED (14/14)! =======")
     print("=======================================================")
 
 
 if __name__ == "__main__":
     main()
-

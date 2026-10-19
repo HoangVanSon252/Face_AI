@@ -46,6 +46,8 @@ services:
     build: ./ai_service
     restart: unless-stopped
     environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: "true"
       MODEL_PROVIDERS: CPUExecutionProvider
       DETECTION_SIZE: 640
       # Put the tested .onnx file in ai_service/models and set this to /models/<file>.onnx in .env.
@@ -61,12 +63,14 @@ services:
       - "8002:8002"
     volumes:
       - ./ai_service/models:/models:ro
+      - ./scripts:/app/scripts:ro
+      - insightface_models:/root/.insightface
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
-      interval: 30s
+      interval: 15s
       timeout: 10s
-      retries: 5
-      start_period: 60s
+      retries: 10
+      start_period: 300s
 
   backend:
     build: ./backend
@@ -85,7 +89,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
       CSRF_SECRET_KEY: ${CSRF_SECRET_KEY:?Set CSRF_SECRET_KEY in .env}
-      COOKIE_SECURE: "true"
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-true}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
       AI_SERVICE_URL: http://ai_service:8002
       OBJECT_STORAGE_ENDPOINT: http://object-storage:8333
@@ -121,3 +128,4 @@ services:
 volumes:
   mysql_data:
   minio_data:
+  insightface_models:

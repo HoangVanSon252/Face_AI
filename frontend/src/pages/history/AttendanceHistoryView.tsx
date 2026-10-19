@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Radio,
 } from 'lucide-react'
 import type { AttendanceLog, Role, User } from '../../types'
 import { attendanceService } from '../../services/api'
@@ -19,9 +20,18 @@ import { cn } from '../../lib/utils'
 interface AttendanceHistoryViewProps {
   role: Role
   currentUser: User
+  onOpenLiveSession?: () => void
+  hasActiveSession?: boolean
+  activeSessionInfo?: string
 }
 
-export function AttendanceHistoryView({ role, currentUser }: AttendanceHistoryViewProps) {
+export function AttendanceHistoryView({
+  role,
+  currentUser,
+  onOpenLiveSession,
+  hasActiveSession,
+  activeSessionInfo,
+}: AttendanceHistoryViewProps) {
   const isStudent = role === 'student'
   const [logs, setLogs] = useState<AttendanceLog[]>([])
   const [query, setQuery] = useState('')
@@ -93,10 +103,37 @@ export function AttendanceHistoryView({ role, currentUser }: AttendanceHistoryVi
           </p>
         </div>
 
-        <button className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-white border border-slate-200 text-slate-700 shadow-xs hover:bg-slate-50 transition">
-          <Calendar size={14} className="text-teal-600" /> Tháng 09/2026 <ChevronDown size={14} />
-        </button>
+        <div className="flex items-center gap-2">
+          {onOpenLiveSession && (
+            <button
+              onClick={onOpenLiveSession}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-teal-700 hover:bg-teal-800 text-white shadow-xs transition"
+            >
+              <Radio size={14} className={hasActiveSession ? 'animate-pulse text-rose-300' : ''} />
+              {hasActiveSession ? 'Vào phiên trực tiếp' : 'Mở phiên điểm danh'}
+            </button>
+          )}
+          <button className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-white border border-slate-200 text-slate-700 shadow-xs hover:bg-slate-50 transition">
+            <Calendar size={14} className="text-teal-600" /> Tháng 09/2026 <ChevronDown size={14} />
+          </button>
+        </div>
       </div>
+
+      {hasActiveSession && onOpenLiveSession && (
+        <div className="flex items-center justify-between p-4 rounded-xl border border-teal-200 bg-teal-50/70 text-xs text-teal-900 shadow-xs">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse shrink-0" />
+            <span className="font-semibold">Phiên điểm danh trực tiếp đang mở:</span>
+            <span className="text-teal-700">{activeSessionInfo || 'Đang quét camera sinh trắc học'}</span>
+          </div>
+          <button
+            onClick={onOpenLiveSession}
+            className="px-3 py-1.5 font-semibold text-white bg-teal-700 hover:bg-teal-800 rounded-lg shadow-xs transition shrink-0"
+          >
+            Vào phòng camera điểm danh →
+          </button>
+        </div>
+      )}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
