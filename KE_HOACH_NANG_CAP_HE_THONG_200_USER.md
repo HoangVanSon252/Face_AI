@@ -363,6 +363,18 @@ gzip_types application/json application/javascript text/css;
 - So khớp vector theo lớp: 31ms lần đầu, ~2ms khi có cache.
 - E2E recognize qua backend (khớp + ghi bản ghi + upload + WebSocket): 0,78s.
 
+## Đợt 2 — 29/10/2026 (B1, B3, B4, B5, X4)
+
+| Hạng mục | Trạng thái | Ghi chú kiểm chứng |
+|---|---|---|
+| B1 — Model chống giả mạo MiniFASNet | ✅ Xong | Ensemble MiniFASNetV2 (crop 2,7×) + V1SE (crop 4,0×), tự export từ trọng số chính thức (Apache-2.0) bằng `scripts/liveness/build_models.sh`; ONNX khớp PyTorch (sai lệch 1,2e-7). Ảnh mẫu upstream: thật 1,000; giả 0,155 / 0,003; ~14ms/frame. **Cần hiệu chỉnh ngưỡng bằng webcam thật** |
+| B3 — Thu hồi access token | ✅ Xong | Logout → token bị từ chối ngay (401); khóa tài khoản/đặt lại mật khẩu/refresh reuse → thu hồi mọi access token của user |
+| B4 — WebSocket bằng vé dùng 1 lần | ✅ Xong | Vé 30s; dùng lại → 403; `?token=` cũ → 403; trình duyệt chỉ còn `?ticket=` |
+| B5 — CSRF ký HMAC gắn với phiên | ✅ Xong | Token giả/không ký → 403. Người dùng đang đăng nhập phải đăng nhập lại 1 lần sau khi nâng cấp |
+| X4 — WebSocket tự kết nối lại | ✅ Xong | Backoff 1→15s + jitter, ping 25s, tải lại feed sau khi nối lại, banner 🟢🟡🔴 + nút thử lại |
+
+Kiểm thử: backend 33 test, AI 8 test, Playwright 5 flow — đều pass.
+
 **Việc tiếp theo để đạt kịch bản A:** (1) kiosk chỉ gửi frame khi trình duyệt đã thấy khuôn mặt ổn định (gộp vào G5); (2) chạy trên máy chủ nhiều core hơn; (3) cân nhắc model nhận diện nhẹ hơn (ví dụ `buffalo_s`) — **phải đăng ký lại toàn bộ khuôn mặt** vì embedding khác nhau.
 
 ---
