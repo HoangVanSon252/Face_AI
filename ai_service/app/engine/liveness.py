@@ -7,6 +7,7 @@ import onnxruntime as ort
 from fastapi import HTTPException, status
 
 from app.core.config import settings
+from app.engine.onnx_options import session_options
 
 
 def _model_unavailable(message: str) -> HTTPException:
@@ -19,7 +20,11 @@ def _session() -> ort.InferenceSession:
     if model_path is None or not model_path.is_file():
         raise _model_unavailable("Liveness model is not configured")
     try:
-        return ort.InferenceSession(str(model_path), providers=settings.model_providers_list)
+        return ort.InferenceSession(
+            str(model_path),
+            sess_options=session_options(),
+            providers=settings.model_providers_list,
+        )
     except Exception as exc:
         raise _model_unavailable("Liveness model could not be loaded") from exc
 
@@ -59,7 +64,7 @@ def _live_probability(output: np.ndarray) -> float:
 def check_liveness(face_image: np.ndarray, face=None) -> tuple[bool, float]:
     model_path = settings.liveness_model_file
     if model_path is None or not model_path.is_file():
-        if settings.ENVIRONMENT == "development" and settings.DEBUG:
+        if settings.liveness_fallback_allowed:
             score = float(getattr(face, "det_score", 0.0) or 0.0)
             return score >= 0.65, round(max(0.0, min(score, 1.0)), 6)
         raise _model_unavailable("Liveness model is not configured")

@@ -5,8 +5,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.models.face import FaceProfileStatusEnum
 
 
+# ~3MB Base64 ≈ 2,2MB ảnh; khớp giới hạn của ai_service.
+MAX_IMAGE_BASE64_LENGTH = 3_000_000
+
+
 class FaceSample(BaseModel):
-    image_base64: str = Field(min_length=100)
+    image_base64: str = Field(min_length=100, max_length=MAX_IMAGE_BASE64_LENGTH)
     is_primary: bool = False
 
 
@@ -37,7 +41,7 @@ class FaceProfileResponse(BaseModel):
 
 
 class RecognitionRequest(BaseModel):
-    image_base64: str = Field(min_length=100)
+    image_base64: str = Field(min_length=100, max_length=MAX_IMAGE_BASE64_LENGTH)
 
 
 class RecognitionResponse(BaseModel):

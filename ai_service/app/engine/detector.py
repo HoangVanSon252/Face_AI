@@ -4,6 +4,8 @@ import cv2
 import numpy as np
 from fastapi import HTTPException, status
 
+from app.core.config import settings
+
 
 def decode_base64_image(value: str) -> np.ndarray:
     """Decode JPEG/PNG Base64 to OpenCV BGR image."""
@@ -30,5 +32,11 @@ def decode_base64_image(value: str) -> np.ndarray:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Image must be at least 80x80 pixels",
         )
+
+    # Webcam frames rarely need more than ~1280px; larger uploads only cost CPU.
+    longest = max(height, width)
+    if longest > settings.MAX_IMAGE_SIDE:
+        scale = settings.MAX_IMAGE_SIDE / longest
+        image = cv2.resize(image, (int(width * scale), int(height * scale)), interpolation=cv2.INTER_AREA)
 
     return image

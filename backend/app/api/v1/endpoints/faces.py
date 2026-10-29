@@ -1,20 +1,22 @@
 from datetime import datetime
-from math import sqrt
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.api import dependencies
 from app.core.config import settings
+from app.core.limiter import limiter, session_key, user_key
 from app.crud import crud_attendance, crud_face
 from app.models.attendance import AttendanceRecord, AttendanceStatusEnum, ReviewStatusEnum, SessionStatusEnum, VerificationMethodEnum
-from app.models.face import FaceEmbedding, FaceProfile, FaceProfileStatusEnum
+from app.models.face import FaceProfile, FaceProfileStatusEnum
 from app.models.user import RoleEnum, Student
 from app.schemas.face import EvidenceUrlResponse, FaceProfileCreate, FaceProfileResponse, RecognitionRequest, RecognitionResponse
-from app.services.ai_client import check_liveness, extract_embedding, detect_faces_fast
+from app.services.ai_client import analyze_face, detect_faces_fast
 from app.services.audit_service import write_audit_log
 from app.services.realtime import realtime_service
+from app.services.face_matcher import best_match
 from app.services.object_storage import create_download_url, upload_attendance_evidence
 
 router = APIRouter()
@@ -31,7 +33,8 @@ def _profile_response(profile: FaceProfile) -> FaceProfileResponse:
 
 
 @router.post("/students/{student_id}/face-profiles", response_model=FaceProfileResponse, status_code=201)
-async def enroll_face_profile(student_id: int, data: FaceProfileCreate, db: Session = Depends(dependencies.get_db), current_user=Depends(dependencies.get_current_active_user)):
+@limiter.limit(settings.RATE_LIMIT_FACE_ENROLL, key_func=user_key)
+def enroll_face_profile(request: Request, student_id: int, data: FaceProfileCreate, db: Session = Depends(dependencies.get_db), current_user=Depends(dependencies.get_current_active_user)):
     dependencies.require_student_access(db, student_id, current_user)
     if db.get(Student, student_id) is None:
         raise HTTPException(status_code=404, detail="Student not found")
@@ -39,10 +42,9 @@ async def enroll_face_profile(student_id: int, data: FaceProfileCreate, db: Sess
     for sample in data.samples[:settings.FACE_MAX_SAMPLES]:
         # Enrollment is also a biometric verification event: reject replayed
         # photos instead of creating a profile from an unverified image.
-        liveness = check_liveness(sample.image_base64)
-        if not liveness.get("is_live"):
+        result = analyze_face(sample.image_base64)
+        if not result["liveness"].get("is_live"):
             continue
-        result = extract_embedding(sample.image_base64)
         if float(result["quality_score"]) >= settings.FACE_MIN_QUALITY_SCORE:
             accepted.append({**result, "is_primary": sample.is_primary})
     if len(accepted) < settings.FACE_MIN_SAMPLES:
@@ -82,7 +84,9 @@ def get_my_face_profile(
 
 
 @router.post("/face/detect-frame")
+@limiter.limit(settings.RATE_LIMIT_FACE_DETECT, key_func=user_key)
 def detect_frame(
+    request: Request,
     data: RecognitionRequest,
     current_user=Depends(dependencies.get_current_active_user),
 ):
@@ -124,19 +128,13 @@ def get_evidence_url(
     )
 
 
-def _cosine(left: list[float], right: list[float]) -> float:
-    dot = sum(a * b for a, b in zip(left, right))
-    norm = sqrt(sum(a * a for a in left)) * sqrt(sum(b * b for b in right))
-    return dot / norm if norm else 0.0
-
-
-@router.post("/sessions/{session_id}/recognitions", response_model=RecognitionResponse, status_code=201)
-async def recognize(session_id: int, data: RecognitionRequest, db: Session = Depends(dependencies.get_db), current_user=Depends(dependencies.require_role(STAFF))):
+def _recognize(session_id: int, data: RecognitionRequest, db: Session, current_user) -> tuple[RecognitionResponse, dict | None]:
+    """Blocking part of recognition (DB, AI, object storage); runs in the threadpool."""
     session = dependencies.require_session_access(db, session_id, current_user)
     if session.status != SessionStatusEnum.OPEN:
         raise HTTPException(status_code=409, detail="Attendance session is not open")
     try:
-        result = extract_embedding(data.image_base64)
+        result = analyze_face(data.image_base64)
     except HTTPException as exc:
         if exc.status_code == 422:
             return RecognitionResponse(
@@ -144,38 +142,24 @@ async def recognize(session_id: int, data: RecognitionRequest, db: Session = Dep
                 quality_score=0.0,
                 review_required=False,
                 reason=exc.detail or "No face detected in frame",
-            )
+            ), None
         raise
 
-    try:
-        liveness = check_liveness(data.image_base64)
-    except HTTPException as exc:
-        if exc.status_code == 422:
-            return RecognitionResponse(
-                matched=False,
-                quality_score=float(result.get("quality_score", 0.0)),
-                review_required=False,
-                reason=exc.detail or "Liveness verification could not isolate face",
-            )
-        raise
-
+    quality = float(result["quality_score"])
+    liveness = result["liveness"]
     liveness_score = float(liveness["score"])
     if not liveness.get("is_live"):
         return RecognitionResponse(
             matched=False,
-            quality_score=float(result["quality_score"]),
+            quality_score=quality,
             review_required=True,
             reason="Liveness verification rejected this frame",
-        )
-    query_embedding = result["embedding"]
-    candidates = db.query(FaceEmbedding, FaceProfile.student_id).join(FaceProfile).filter(FaceProfile.status == FaceProfileStatusEnum.ACTIVE).all()
-    best = max((( _cosine(query_embedding, row.embedding_data), student_id) for row, student_id in candidates if len(row.embedding_data) == len(query_embedding)), default=None)
-    quality = float(result["quality_score"])
+        ), None
+    # Candidates are limited to students enrolled in this section.
+    best = best_match(db, session.section_id, result["embedding"])
     if best is None or best[0] < settings.FACE_MATCH_THRESHOLD:
-        return RecognitionResponse(matched=False, quality_score=quality, review_required=True, reason="No face profile met the matching threshold")
+        return RecognitionResponse(matched=False, quality_score=quality, review_required=True, reason="No face profile met the matching threshold"), None
     confidence, student_id = best
-    if not crud_attendance.is_enrolled(db, session.section_id, student_id):
-        return RecognitionResponse(matched=False, quality_score=quality, review_required=True, reason="Matched student is not enrolled")
 
     already_checked_in = (
         db.query(AttendanceRecord.id)
@@ -188,14 +172,14 @@ async def recognize(session_id: int, data: RecognitionRequest, db: Session = Dep
     if already_checked_in:
         raise HTTPException(status_code=409, detail="Student has already checked in")
 
-    # Store evidence only for a matched, enrolled student; never retain every webcam frame.
-    evidence_uri, _checksum = upload_attendance_evidence(session_id, data.image_base64)
     auto_approved = confidence >= settings.FACE_AUTO_APPROVE_THRESHOLD
     checked_in_at = datetime.utcnow()
     try:
         attendance_status = crud_attendance.attendance_status_for_check_in(session, checked_in_at)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    # Store evidence only once the check-in will be recorded; never retain every webcam frame.
+    evidence_uri, _checksum = upload_attendance_evidence(session_id, data.image_base64)
     record = AttendanceRecord(
         session_id=session_id,
         student_id=student_id,
@@ -214,5 +198,16 @@ async def recognize(session_id: int, data: RecognitionRequest, db: Session = Dep
         db.rollback()
         raise HTTPException(status_code=409, detail="Student has already checked in")
     db.refresh(record)
-    await realtime_service.publish(session_id, "attendance_detected", {"record_id": record.id, "student_id": student_id, "status": record.status.value, "confidence_score": confidence, "review_required": not auto_approved})
-    return RecognitionResponse(matched=True, student_id=student_id, attendance_record_id=record.id, confidence_score=confidence, quality_score=quality, review_required=not auto_approved)
+    event = {"record_id": record.id, "student_id": student_id, "status": record.status.value, "confidence_score": confidence, "review_required": not auto_approved}
+    response = RecognitionResponse(matched=True, student_id=student_id, attendance_record_id=record.id, confidence_score=confidence, quality_score=quality, review_required=not auto_approved)
+    return response, event
+
+
+@router.post("/sessions/{session_id}/recognitions", response_model=RecognitionResponse, status_code=201)
+@limiter.limit(settings.RATE_LIMIT_FACE_RECOGNIZE, key_func=session_key)
+async def recognize(request: Request, session_id: int, data: RecognitionRequest, db: Session = Depends(dependencies.get_db), current_user=Depends(dependencies.require_role(STAFF))):
+    # Sync DB/HTTP/S3 calls must not block the event loop shared by every request.
+    response, event = await run_in_threadpool(_recognize, session_id, data, db, current_user)
+    if event is not None:
+        await realtime_service.publish(session_id, "attendance_detected", event)
+    return response

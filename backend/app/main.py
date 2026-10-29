@@ -12,6 +12,7 @@ from app.api.v1.api import api_router
 from app.core.exceptions import setup_exception_handler
 from app.core.logging import setup_logging
 from app.services.realtime import realtime_service
+from app.services.ai_client import close_client
 from app.services.object_storage import ensure_bucket
 
 setup_logging()
@@ -26,6 +27,7 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         await realtime_service.stop()
+        close_client()
         engine.dispose()
 
 app = FastAPI(

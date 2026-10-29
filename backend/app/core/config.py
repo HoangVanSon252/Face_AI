@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     RATE_LIMIT_LOGIN: str = "60/minute"
     RATE_LIMIT_REGISTER: str = "30/minute"
     RATE_LIMIT_REFRESH: str = "60/minute"
+    # Kiosk gửi 1 frame / 1,6s ≈ 38/phút; 90/phút chừa dư cho thao tác chụp tay.
+    RATE_LIMIT_FACE_RECOGNIZE: str = "90/minute"
+    RATE_LIMIT_FACE_DETECT: str = "90/minute"
+    RATE_LIMIT_FACE_ENROLL: str = "10/hour"
 
     MYSQL_USER: str
     MYSQL_PASSWORD: str
@@ -45,13 +49,15 @@ class Settings(BaseSettings):
     MYSQL_SSL_CA_BASE64: str | None = None
     MYSQL_SSL_REQUIRED: bool = False
     REDIS_URL: str
-    DB_POOL_SIZE: int = 10
-    DB_MAX_OVERFLOW: int = 20
-    DB_POOL_TIMEOUT: int = 30
+    # Pool tính cho MỖI worker: tổng kết nối = (POOL_SIZE + MAX_OVERFLOW) × số worker,
+    # phải nhỏ hơn max_connections của MySQL.
+    DB_POOL_SIZE: int = 15
+    DB_MAX_OVERFLOW: int = 15
+    DB_POOL_TIMEOUT: int = 10
     DB_CONNECT_TIMEOUT: int = 10
     REPORT_MAX_ROWS: int = 10_000
     AI_SERVICE_URL: str = "http://ai_service:8002"
-    AI_SERVICE_TIMEOUT_SECONDS: float = 30.0
+    AI_SERVICE_TIMEOUT_SECONDS: float = 10.0
     OBJECT_STORAGE_ENDPOINT: str | None = None
     OBJECT_STORAGE_ACCESS_KEY: str | None = None
     OBJECT_STORAGE_SECRET_KEY: str | None = None
