@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_FACE_RECOGNIZE: str = "90/minute"
     RATE_LIMIT_FACE_DETECT: str = "90/minute"
     RATE_LIMIT_FACE_ENROLL: str = "10/hour"
+    RATE_LIMIT_WS_TICKET: str = "30/minute"
 
     MYSQL_USER: str
     MYSQL_PASSWORD: str

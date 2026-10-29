@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import type { AttendanceSession, AttendanceLog } from '../../types'
 import { attendanceService, sessionService, classService, userService, faceService } from '../../services/api'
-import { AttendanceWebSocketClient } from '../../websocket/attendanceWs'
+import { AttendanceWebSocketClient, type WsConnectionState } from '../../websocket/attendanceWs'
 import { WebcamCapture } from '../../components/attendance/WebcamCapture'
 import { ConfirmModal } from '../../components/common/ConfirmModal'
 import { useToast } from '../../components/common/Toast'
@@ -43,7 +43,9 @@ export function LiveSessionView({ session, onCloseSession, canOperate }: LiveSes
   const sessionTitle = session?.title || activeSessionId
 
   const [showCloseModal, setShowCloseModal] = useState(false)
-  const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'offline'>('connecting')
+  const [wsStatus, setWsStatus] = useState<WsConnectionState>('connecting')
+  const [wsAttempt, setWsAttempt] = useState(0)
+  const wsClientRef = useRef<AttendanceWebSocketClient | null>(null)
   const [currentTime, setCurrentTime] = useState(new Date().toLocaleTimeString('vi-VN'))
 
   const [feedLogs, setFeedLogs] = useState<AttendanceLog[]>([])
@@ -113,39 +115,47 @@ export function LiveSessionView({ session, onCloseSession, canOperate }: LiveSes
       return
     }
     const client = new AttendanceWebSocketClient(numericSessionId)
-    client.connect()
-    setWsStatus('connecting')
+    wsClientRef.current = client
+
+    const refreshFromServer = async () => {
+      const logs = await attendanceService.getLogs(String(numericSessionId))
+      setFeedLogs(logs)
+      setReviewQueue(logs.filter((log) => log.reviewStatus === 'pending'))
+      setRoster((previous) => previous.map((student) => {
+        const log = logs.find((item) => item.studentId === student.code)
+        if (!log) return student
+        const isPresent = log.status === 'present' || log.status === 'late'
+        const isLate = log.status === 'late'
+        return {
+          ...student,
+          present: isPresent,
+          isLate,
+          lateMinutes: log.lateMinutes,
+          time: log.checkInTime,
+          confidence: log.confidenceScore,
+        }
+      }))
+    }
 
     const unsubscribe = client.subscribe(async (msg) => {
       if (msg.type === 'attendance_detected') {
-        const logs = await attendanceService.getLogs(String(numericSessionId))
-        setFeedLogs(logs)
-        setReviewQueue(logs.filter((log) => log.reviewStatus === 'pending'))
-        setRoster((previous) => previous.map((student) => {
-          const log = logs.find((item) => item.studentId === student.code)
-          if (!log) return student
-          const isPresent = log.status === 'present' || log.status === 'late'
-          const isLate = log.status === 'late'
-          return {
-            ...student,
-            present: isPresent,
-            isLate,
-            lateMinutes: log.lateMinutes,
-            time: log.checkInTime,
-            confidence: log.confidenceScore,
-          }
-        }))
+        await refreshFromServer()
         showToast('Đã ghi nhận một lượt nhận diện mới.', 'success')
-      } else if (msg.type === 'session_status') {
-        setWsStatus('connected')
-      } else if (msg.type === 'error') {
-        setWsStatus('offline')
+      } else if (msg.type === 'connection') {
+        setWsStatus(msg.payload.state as WsConnectionState)
+        setWsAttempt(Number(msg.payload.attempt) || 0)
+        // Events published while offline are not replayed: reload the feed.
+        if (msg.payload.state === 'connected' && msg.payload.resumed) {
+          await refreshFromServer()
+        }
       }
     })
+    client.connect()
 
     return () => {
       unsubscribe()
       client.disconnect()
+      wsClientRef.current = null
     }
   }, [canOperate, numericSessionId, showToast])
 
@@ -351,9 +361,24 @@ export function LiveSessionView({ session, onCloseSession, canOperate }: LiveSes
             <span className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500" /> Webcam kết nối ổn định
             </span>
-            <span className={cn('font-medium', wsStatus === 'connected' ? 'text-teal-600' : 'text-amber-600')}>
-              WebSocket: {wsStatus === 'connected' ? 'Đang truyền trực tiếp' : 'Đang kết nối...'}
-            </span>
+            {wsStatus === 'offline' ? (
+              <button
+                type="button"
+                onClick={() => wsClientRef.current?.reconnectNow()}
+                className="font-medium text-rose-600 underline underline-offset-2"
+              >
+                🔴 Mất kết nối máy chủ — bấm để kết nối lại
+              </button>
+            ) : (
+              <span
+                aria-live="polite"
+                className={cn('font-medium', wsStatus === 'connected' ? 'text-teal-600' : 'text-amber-600')}
+              >
+                {wsStatus === 'connected' && '🟢 Đã kết nối thời gian thực'}
+                {wsStatus === 'connecting' && '🟡 Đang kết nối...'}
+                {wsStatus === 'reconnecting' && `🟡 Mạng gián đoạn — đang thử kết nối lại (lần ${Math.max(wsAttempt, 1)})...`}
+              </span>
+            )}
           </div>
 
         </div>

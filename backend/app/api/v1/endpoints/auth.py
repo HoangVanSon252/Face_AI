@@ -11,17 +11,19 @@ import secrets
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
+from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from app.api import dependencies
 from app.core import security
 from app.core.config import settings
 from app.core.csrf import set_auth_cookies, clear_auth_cookies, verify_csrf_token
-from app.core.limiter import limiter
+from app.core.limiter import limiter, user_key
 from app.crud import crud_user
 from app.schemas.token import Token
 from app.models.user import UserStatusEnum
 from app.schemas.user import UserResponse
+from app.services import token_store
 from app.services.audit_service import write_audit_log
 router = APIRouter()
 
@@ -222,6 +224,19 @@ def refresh_access_token(
 # POST /logout
 # Thu hồi refresh token, xoá cookie
 # ─────────────────────────────────────────────
+def _revoke_bearer_token(request: Request) -> None:
+    """Blacklist the caller's access token so it stops working before it expires."""
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    except JWTError:
+        return
+    if payload.get("type") == "access" and payload.get("jti") and payload.get("exp"):
+        token_store.revoke_access_token(payload["jti"], int(payload["exp"]))
+
+
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(
     request: Request,
@@ -230,7 +245,8 @@ def logout(
     refresh_token: str | None = Cookie(default=None),
     _csrf: None = Depends(verify_csrf_token),
 ) -> None:
-    """Logout – thu hồi refresh token và xoá cookie."""
+    """Logout – thu hồi refresh token, đưa access token hiện tại vào blacklist và xoá cookie."""
+    _revoke_bearer_token(request)
     if refresh_token:
         token_obj = crud_user.get_refresh_token_db(db, refresh_token)
         if token_obj and token_obj.revoked_at is None:
@@ -247,6 +263,16 @@ def logout(
             )
             db.commit()
     clear_auth_cookies(response)
+
+
+@router.post("/ws-ticket")
+@limiter.limit(settings.RATE_LIMIT_WS_TICKET, key_func=user_key)
+def create_ws_ticket(request: Request, current_user=Depends(dependencies.get_current_active_user)) -> dict:
+    """Single-use, 30-second ticket for opening a WebSocket without putting the JWT in the URL."""
+    return {
+        "ticket": token_store.issue_ws_ticket(current_user.id),
+        "expires_in_seconds": token_store.WS_TICKET_TTL_SECONDS,
+    }
 
 
 @router.get("/me", response_model=UserResponse)
