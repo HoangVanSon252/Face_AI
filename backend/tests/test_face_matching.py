@@ -123,3 +123,29 @@ def test_analyze_face_propagates_ai_validation_errors(monkeypatch):
 
     assert exc.value.status_code == 422
     assert exc.value.detail == "No face detected"
+
+
+def test_ai_calls_are_rejected_fast_when_all_slots_are_busy(monkeypatch):
+    from threading import BoundedSemaphore
+
+    monkeypatch.setattr(ai_client, "_inflight", BoundedSemaphore(1))
+    monkeypatch.setattr(ai_client.settings, "AI_QUEUE_WAIT_SECONDS", 0.05)
+    ai_client._inflight.acquire()  # another request holds the only slot
+
+    with pytest.raises(HTTPException) as exc:
+        ai_client.analyze_face("x" * 200)
+
+    assert exc.value.status_code == 503
+    assert exc.value.headers == {"Retry-After": "1"}
+    ai_client._inflight.release()
+
+
+def test_ai_slot_is_released_after_errors(monkeypatch):
+    from threading import BoundedSemaphore
+
+    monkeypatch.setattr(ai_client, "_inflight", BoundedSemaphore(1))
+    monkeypatch.setattr(ai_client, "get_client", lambda: _Client(_Response(422, {"detail": "No face detected"})))
+
+    for _ in range(3):  # would block on the 2nd call if the slot leaked
+        with pytest.raises(HTTPException):
+            ai_client.analyze_face("x" * 200)

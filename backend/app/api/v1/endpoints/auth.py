@@ -30,7 +30,7 @@ router = APIRouter()
 
 # ─────────────────────────────────────────────
 # POST /login/access-token
-# Rate limit: 5 lần/phút/IP
+# Rate limit: RATE_LIMIT_LOGIN/IP + khóa tài khoản sau LOGIN_MAX_FAILURES lần sai
 # ─────────────────────────────────────────────
 @router.post("/login", response_model=Token)
 @limiter.limit(settings.RATE_LIMIT_LOGIN)
@@ -45,9 +45,19 @@ def login_access_token(
     Refresh Token được set vào HttpOnly Cookie.
     CSRF Token được set vào readable Cookie.
     """
+    # Account locked after repeated failures (checked before the costly bcrypt).
+    if token_store.login_locked(form_data.username):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many failed sign-in attempts. Try again in {settings.LOGIN_LOCKOUT_MINUTES} minutes.",
+        )
     # Xác thực thông tin đăng nhập
     user = crud_user.get_user_by_username(db, username=form_data.username)
-    if not user or not security.verify_password(form_data.password, user.password_hash if user else ""):
+    password_hash = user.password_hash if user else ""
+    # bcrypt takes ~0.3s of CPU: do not hold a pooled DB connection meanwhile.
+    db.rollback()
+    if not user or not security.verify_password(form_data.password, password_hash):
+        token_store.record_login_failure(form_data.username)
         write_audit_log(
             db,
             action="Failed_Login_Attempt",
@@ -85,6 +95,8 @@ def login_access_token(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Inactive user",
         )
+
+    token_store.clear_login_failures(form_data.username)
 
     # Tạo Access Token
     access_token_expires = timedelta(

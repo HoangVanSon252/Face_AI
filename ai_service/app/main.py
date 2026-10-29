@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.endpoints.face import router as face_router
 from app.core.config import settings
+from app.core.metrics import MetricsMiddleware, metrics_endpoint
 from app.engine.liveness import models_configured
 
 app = FastAPI(
@@ -22,6 +23,10 @@ app.add_middleware(
 )
 
 app.include_router(face_router, prefix=settings.API_V1_STR)
+
+# Prometheus metrics at /metrics (inference latency per endpoint); internal only.
+app.add_middleware(MetricsMiddleware)
+app.add_route("/metrics", metrics_endpoint, include_in_schema=False)
 
 
 @app.on_event("startup")

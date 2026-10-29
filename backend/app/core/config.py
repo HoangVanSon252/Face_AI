@@ -32,7 +32,11 @@ class Settings(BaseSettings):
     ALLOWED_HOSTS: str = "localhost,127.0.0.1,testserver,backend"
     MAX_REQUEST_BODY_SIZE: int = 5 * 1024 * 1024
 
-    RATE_LIMIT_LOGIN: str = "60/minute"
+    # Per client IP. A campus behind one NAT signs in at once at the start of
+    # class, so this stays generous; brute force is stopped per account below.
+    RATE_LIMIT_LOGIN: str = "300/minute"
+    LOGIN_MAX_FAILURES: int = 10
+    LOGIN_LOCKOUT_MINUTES: int = 15
     RATE_LIMIT_REGISTER: str = "30/minute"
     RATE_LIMIT_REFRESH: str = "60/minute"
     # Kiosk gửi 1 frame / 1,6s ≈ 38/phút; 90/phút chừa dư cho thao tác chụp tay.
@@ -59,6 +63,10 @@ class Settings(BaseSettings):
     REPORT_MAX_ROWS: int = 10_000
     AI_SERVICE_URL: str = "http://ai_service:8002"
     AI_SERVICE_TIMEOUT_SECONDS: float = 10.0
+    # Concurrent AI calls per backend worker (x BACKEND_WORKERS should roughly
+    # match AI_WORKERS x 2) and how long a frame may wait for a slot.
+    AI_MAX_INFLIGHT_PER_WORKER: int = 2
+    AI_QUEUE_WAIT_SECONDS: float = 2.0
     OBJECT_STORAGE_ENDPOINT: str | None = None
     OBJECT_STORAGE_ACCESS_KEY: str | None = None
     OBJECT_STORAGE_SECRET_KEY: str | None = None
@@ -71,6 +79,15 @@ class Settings(BaseSettings):
     # InsightFace cosine scores around 0.80 are stable matches in this
     # deployment; lower scores remain in the teacher review queue.
     FACE_AUTO_APPROVE_THRESHOLD: float = 0.80
+
+    # AES-256-GCM key (Base64, 32 bytes) encrypting face embeddings at rest.
+    # Generate: python -c "import base64,os;print(base64.b64encode(os.urandom(32)).decode())"
+    # Losing it makes every enrolled face profile unreadable: back it up with the DB backups.
+    FACE_EMBEDDING_KEY: str | None = None
+    # Version of the biometric consent text the student agrees to (stored with each consent).
+    BIOMETRIC_POLICY_VERSION: str = "2026-10"
+    # Attendance evidence photos are deleted after this many days (0 = keep forever).
+    EVIDENCE_RETENTION_DAYS: int = 180
 
     @field_validator("DEBUG", mode="before")
     @classmethod
@@ -168,6 +185,9 @@ class Settings(BaseSettings):
 
         if "*" in self.allowed_origins_list:
             raise ValueError("Wildcard CORS origin is forbidden in production")
+
+        if not self.FACE_EMBEDDING_KEY:
+            raise ValueError("FACE_EMBEDDING_KEY is required in production")
 
         return self
 

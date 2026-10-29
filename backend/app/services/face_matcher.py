@@ -13,6 +13,7 @@ import numpy as np
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.biometric_crypto import decrypt_embedding
 from app.models.course import Enrollment, EnrollmentStatusEnum
 from app.models.face import FaceEmbedding, FaceProfile, FaceProfileStatusEnum
 
@@ -62,7 +63,9 @@ def _load(db: Session, section_id: int, signature: tuple, dimension: int) -> Sec
         .with_entities(FaceEmbedding.embedding_data, FaceProfile.student_id)
         .all()
     )
-    vectors = [(data, student_id) for data, student_id in rows if len(data) == dimension]
+    # Decrypt only when the section's profiles change (cache miss), not per frame.
+    decoded = ((decrypt_embedding(data), student_id) for data, student_id in rows)
+    vectors = [(data, student_id) for data, student_id in decoded if len(data) == dimension]
     if not vectors:
         matrix = np.empty((0, dimension), dtype=np.float32)
         student_ids = np.empty((0,), dtype=np.int64)

@@ -88,3 +88,34 @@ def consume_ws_ticket(ticket: str) -> int | None:
         logger.warning("ws_ticket_store_unavailable")
         return None
     return int(value) if value is not None else None
+
+
+# Brute-force protection per account. The per-IP limit cannot do this alone:
+# a whole campus shares one NAT address, so it must stay generous.
+def _login_key(username: str) -> str:
+    return f"login_fail:{username.strip().lower()}"
+
+
+def login_locked(username: str) -> bool:
+    try:
+        failures = _client().get(_login_key(username))
+    except RedisError as exc:
+        raise _unavailable(exc) from exc
+    return failures is not None and int(failures) >= settings.LOGIN_MAX_FAILURES
+
+
+def record_login_failure(username: str) -> None:
+    try:
+        key = _login_key(username)
+        failures = _client().incr(key)
+        if failures == 1:
+            _client().expire(key, settings.LOGIN_LOCKOUT_MINUTES * 60)
+    except RedisError as exc:
+        raise _unavailable(exc) from exc
+
+
+def clear_login_failures(username: str) -> None:
+    try:
+        _client().delete(_login_key(username))
+    except RedisError as exc:
+        raise _unavailable(exc) from exc

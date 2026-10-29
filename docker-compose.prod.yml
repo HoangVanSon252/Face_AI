@@ -1,0 +1,32 @@
+# Self-hosted production with HTTPS (camera access requires a secure origin).
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Do NOT also load docker-compose.override.yml (it publishes internal ports).
+# Required in .env: DOMAIN, ACME_EMAIL, and ENVIRONMENT=production,
+# DEBUG=false, COOKIE_SECURE=true, ALLOWED_ORIGINS=https://$DOMAIN,
+# ALLOWED_HOSTS=$DOMAIN,backend (see .env.example).
+# Managed platforms that terminate TLS themselves (e.g. Render) do not need this file.
+services:
+  caddy:
+    image: caddy:2.10.0-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
+  frontend:
+    # Only Caddy is exposed; Nginx stays on the internal network.
+    ports: !reset []
+
+volumes:
+  caddy_data:
+  caddy_config:

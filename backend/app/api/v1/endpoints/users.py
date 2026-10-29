@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
@@ -6,7 +6,7 @@ from app.api.dependencies import get_current_active_user, get_db, require_role
 from app.core.security import get_password_hash
 from app.crud.crud_user import revoke_all_user_tokens
 from app.models.course import ClassSection, Enrollment, EnrollmentStatusEnum
-from app.models.user import RoleEnum, User, UserStatusEnum
+from app.models.user import Lecturer, RoleEnum, Student, User, UserStatusEnum
 from app.schemas.user import AdminPasswordReset, AdminUserResponse, AdminUserUpdate, UserCreate, UserResponse
 from app.services.audit_service import write_audit_log
 from app.services.realtime import realtime_service
@@ -40,6 +40,7 @@ def _ensure_last_admin_is_protected(db: Session, target: User, new_role: RoleEnu
 
 @router.get("/", response_model=list[AdminUserResponse])
 def list_users(
+    response: Response,
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=500),
     query: str | None = Query(default=None, max_length=100),
@@ -57,11 +58,20 @@ def list_users(
         statement = statement.filter(or_(User.id == current_user.id, User.role == RoleEnum.STUDENT))
     if query:
         pattern = f"%{query.strip()}%"
-        statement = statement.filter(or_(User.username.ilike(pattern), User.email.ilike(pattern), User.full_name.ilike(pattern)))
+        statement = (
+            statement.outerjoin(Student, Student.user_id == User.id)
+            .outerjoin(Lecturer, Lecturer.user_id == User.id)
+            .filter(or_(
+                User.username.ilike(pattern), User.email.ilike(pattern), User.full_name.ilike(pattern),
+                Student.student_code.ilike(pattern), Lecturer.lecturer_code.ilike(pattern),
+            ))
+        )
     if role:
         statement = statement.filter(User.role == role)
     if account_status:
         statement = statement.filter(User.status == account_status)
+    # Total before paging, for page controls; the body stays a plain list.
+    response.headers["X-Total-Count"] = str(statement.order_by(None).count())
     return statement.order_by(User.created_at.desc(), User.id.desc()).offset(skip).limit(limit).all()
 
 

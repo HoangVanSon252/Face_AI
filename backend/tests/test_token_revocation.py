@@ -116,3 +116,21 @@ def test_unsigned_or_mismatched_csrf_tokens_are_rejected():
 def test_csrf_is_not_required_without_a_refresh_cookie():
     # Nothing to protect: refresh fails with 401 and logout only clears cookies.
     csrf.verify_csrf_token(None, None, None)
+
+
+def test_account_locks_after_repeated_failures_and_success_resets(redis, monkeypatch):
+    monkeypatch.setattr(token_store.settings, "LOGIN_MAX_FAILURES", 3)
+    redis.incr = lambda key: redis.data.__setitem__(key, str(int(redis.data.get(key, 0)) + 1)) or int(redis.data[key])
+    redis.expire = lambda key, seconds: True
+    redis.delete = lambda key: redis.data.pop(key, None)
+
+    for _ in range(2):
+        token_store.record_login_failure("Student")
+    assert not token_store.login_locked("student")
+
+    token_store.record_login_failure("student ")
+    assert token_store.login_locked("STUDENT")
+    assert not token_store.login_locked("someone-else")
+
+    token_store.clear_login_failures("student")
+    assert not token_store.login_locked("student")

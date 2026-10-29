@@ -1,3 +1,4 @@
+from threading import BoundedSemaphore
 from typing import Any
 
 import httpx
@@ -6,6 +7,10 @@ from fastapi import HTTPException, status
 from app.core.config import settings
 
 _client: httpx.Client | None = None
+# Backpressure: cap concurrent AI calls per worker. When the AI is saturated a
+# frame is rejected after a short wait (503 + Retry-After) instead of queueing
+# for the full timeout; the kiosk simply sends its next frame.
+_inflight = BoundedSemaphore(settings.AI_MAX_INFLIGHT_PER_WORKER)
 
 
 def get_client() -> httpx.Client:
@@ -28,11 +33,19 @@ def close_client() -> None:
 
 
 def _post(path: str, image_base64: str, failure_detail: str, timeout: float | None = None) -> dict[str, Any]:
+    if not _inflight.acquire(timeout=settings.AI_QUEUE_WAIT_SECONDS):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI service is busy",
+            headers={"Retry-After": "1"},
+        )
     try:
         kwargs = {"timeout": timeout} if timeout is not None else {}
         response = get_client().post(path, json={"image_base64": image_base64}, **kwargs)
     except httpx.RequestError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI service is unavailable") from exc
+    finally:
+        _inflight.release()
     if response.status_code >= 400:
         try:
             detail = response.json().get("detail", failure_detail)

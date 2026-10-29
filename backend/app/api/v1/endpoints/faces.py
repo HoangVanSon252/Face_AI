@@ -52,10 +52,12 @@ def enroll_face_profile(request: Request, student_id: int, data: FaceProfileCrea
             status_code=422,
             detail=f"At least {settings.FACE_MIN_SAMPLES} live, high-quality face samples are required",
         )
-    old = crud_face.active_profile(db, student_id)
-    if old:
-        old.status = FaceProfileStatusEnum.REVOKED
-        old.revoked_at = datetime.utcnow()
+    # Re-enrollment: the previous samples are no longer needed, erase them.
+    crud_face.erase_face_data(db, student_id, revoke_consent=False)
+    crud_face.record_consent(
+        db, student_id, current_user.id, settings.BIOMETRIC_POLICY_VERSION,
+        request.client.host if request.client else None, request.headers.get("user-agent"),
+    )
     profile = crud_face.create_profile(db, student_id, current_user.id, int(accepted[0]["dimension"]))
     for index, item in enumerate(accepted):
         crud_face.add_embedding(db, profile.id, item["embedding"], float(item["quality_score"]), item["is_primary"] or index == 0)
@@ -112,16 +114,43 @@ def get_face_profile(student_id: int, db: Session = Depends(dependencies.get_db)
     return _profile_response(profile)
 
 
+@router.delete("/students/{student_id}/face-profile", status_code=204)
+def erase_face_profile(
+    request: Request,
+    student_id: int,
+    db: Session = Depends(dependencies.get_db),
+    current_user=Depends(dependencies.get_current_active_user),
+):
+    """Withdraw biometric consent: erase all face embeddings of the student.
+    Only the student themself or an admin may do this."""
+    is_self = current_user.role == RoleEnum.STUDENT and current_user.id == student_id
+    if not (is_self or current_user.role == RoleEnum.ADMIN):
+        raise HTTPException(status_code=403, detail="Only the student or an administrator can erase face data")
+    if db.get(Student, student_id) is None:
+        raise HTTPException(status_code=404, detail="Student not found")
+    erased = crud_face.erase_face_data(db, student_id, revoke_consent=True)
+    write_audit_log(
+        db, action="FACE_DATA_ERASED", actor_user_id=current_user.id, entity_type="STUDENT", entity_id=student_id,
+        request=request, details={"student_id": student_id, "embeddings_erased": erased},
+    )
+    db.commit()
+
+
 @router.get("/attendance/{record_id}/evidence-url", response_model=EvidenceUrlResponse)
 def get_evidence_url(
+    request: Request,
     record_id: int,
     db: Session = Depends(dependencies.get_db),
     current_user=Depends(dependencies.require_role(STAFF)),
 ):
-    """Staff may view evidence through a five-minute S3 presigned URL."""
+    """Staff may view evidence through a five-minute S3 presigned URL. Every view is audited."""
     record = dependencies.require_record_staff_access(db, record_id, current_user)
     if not record.evidence_image_uri:
         raise HTTPException(status_code=404, detail="No evidence image is available")
+    write_audit_log(
+        db, action="EVIDENCE_VIEWED", actor_user_id=current_user.id, entity_type="ATTENDANCE_RECORD", entity_id=record.id,
+        request=request, details={"session_id": record.session_id, "student_id": record.student_id}, commit=True,
+    )
     return EvidenceUrlResponse(
         url=create_download_url(record.evidence_image_uri),
         expires_in_seconds=300,
@@ -133,6 +162,9 @@ def _recognize(session_id: int, data: RecognitionRequest, db: Session, current_u
     session = dependencies.require_session_access(db, session_id, current_user)
     if session.status != SessionStatusEnum.OPEN:
         raise HTTPException(status_code=409, detail="Attendance session is not open")
+    # Return the DB connection to the pool while waiting for the AI (up to a few
+    # seconds under load); it is checked out again for the writes below.
+    db.rollback()
     try:
         result = analyze_face(data.image_base64)
     except HTTPException as exc:
