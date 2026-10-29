@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.endpoints.face import router as face_router
 from app.core.config import settings
+from app.engine.liveness import models_configured
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -32,10 +33,7 @@ def preload_models():
 
 @app.get("/health", tags=["health"])
 def health():
-    liveness_configured = bool(
-        settings.liveness_model_file
-        and settings.liveness_model_file.is_file()
-    )
+    liveness_configured = models_configured()
     body = {
         "status": "ok",
         "service": "ai-service",

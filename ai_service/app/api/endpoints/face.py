@@ -1,8 +1,7 @@
 from fastapi import APIRouter, HTTPException, status
 
-from app.core.config import settings
 from app.engine.detector import decode_base64_image
-from app.engine.liveness import check_liveness
+from app.engine.liveness import check_liveness, models_configured
 from app.engine.recognizer import detect_faces, estimate_quality
 from app.schemas.face import (
     AnalyzeResponse,
@@ -14,17 +13,6 @@ from app.schemas.face import (
 )
 
 router = APIRouter(prefix="/face", tags=["face"])
-
-
-def _face_crop(image, face):
-    """Use the detected face, with a small margin, instead of the whole webcam frame."""
-    height, width = image.shape[:2]
-    x1, y1, x2, y2 = (float(value) for value in face.bbox)
-    margin_x = (x2 - x1) * 0.15
-    margin_y = (y2 - y1) * 0.15
-    left, top = max(0, int(x1 - margin_x)), max(0, int(y1 - margin_y))
-    right, bottom = min(width, int(x2 + margin_x)), min(height, int(y2 + margin_y))
-    return image[top:bottom, left:right]
 
 
 def _single_face(image, detail: str):
@@ -47,13 +35,13 @@ def _embedding(face) -> list[float]:
 
 
 def _liveness(image, face) -> LivenessResponse:
-    is_live, score = check_liveness(_face_crop(image, face), face=face)
-    is_configured = bool(settings.liveness_model_file and settings.liveness_model_file.is_file())
+    is_live, score = check_liveness(image, face)
+    is_configured = models_configured()
     return LivenessResponse(
         available=is_configured,
         is_live=is_live,
         score=score,
-        reason=None if is_configured else "Development heuristic; configure LIVENESS_MODEL_PATH for production",
+        reason=None if is_configured else "Development heuristic; configure LIVENESS_MODELS for production",
     )
 
 

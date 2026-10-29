@@ -62,7 +62,9 @@ services:
       # AI_WORKERS x ONNX_INTRA_OP_THREADS <= CPU cores given to this container.
       AI_WORKERS: ${AI_WORKERS:-3}
       ONNX_INTRA_OP_THREADS: ${ONNX_INTRA_OP_THREADS:-2}
-      # Put the tested .onnx file in ai_service/models and set this to /models/<file>.onnx in .env.
+      # Anti-spoofing ensemble built by scripts/liveness/build_models.sh into ai_service/models.
+      LIVENESS_MODELS: ${LIVENESS_MODELS:-}
+      LIVENESS_OUTPUT_TYPE: ${LIVENESS_OUTPUT_TYPE:-auto}
       LIVENESS_MODEL_PATH: ${LIVENESS_MODEL_PATH:-}
       LIVENESS_THRESHOLD: ${LIVENESS_THRESHOLD:-0.85}
       LIVENESS_INPUT_WIDTH: ${LIVENESS_INPUT_WIDTH:-112}
