@@ -375,6 +375,36 @@ gzip_types application/json application/javascript text/css;
 
 Kiểm thử: backend 33 test, AI 8 test, Playwright 5 flow — đều pass.
 
+## Đợt 3–5 — 29–30/10/2026 (tuân thủ, vận hành, frontend, load test)
+
+| Hạng mục | Trạng thái | Ghi chú kiểm chứng |
+|---|---|---|
+| 3.4 — Mã hóa embedding (AES-256-GCM) | ✅ Xong | Migration `e1f2a3b4c5d6` đã mã hóa toàn bộ embedding cũ; so khớp vẫn đúng |
+| 3.4 — Bản ghi đồng ý + màn hình đồng ý | ✅ Xong | Bảng `biometric_consents`; không chụp/gửi ảnh nào trước khi sinh viên đồng ý |
+| 3.4 — Quyền xóa dữ liệu khuôn mặt | ✅ Xong | Chỉ sinh viên đó hoặc admin (giảng viên → 403); xóa toàn bộ embedding + audit |
+| 3.4 — Thời hạn lưu ảnh minh chứng + audit lượt xem | ✅ Xong | Job `maintenance` hằng ngày; giữ ảnh khi còn khiếu nại chờ xử lý |
+| B2 — User MySQL riêng | ✅ Xong | Backend chạy bằng `eduface_app` (chỉ quyền trên DB ứng dụng) |
+| B7 — HTTPS | ✅ Sẵn sàng | `docker-compose.prod.yml` + Caddy (Let's Encrypt) cho tự host; nền tảng có TLS sẵn thì không cần |
+| V3 — Metrics | ✅ Xong | `/metrics` nội bộ (không lộ qua Nginx), profile `monitoring` có Prometheus |
+| V4 — Backup tự động | ✅ Xong | Dịch vụ `db-backup`: dump MySQL + ảnh minh chứng hằng ngày, giữ 14 ngày. **Chưa diễn tập khôi phục toàn phần** (đã khôi phục thành công 1 phần dữ liệu từ bản dump) |
+| G5 — MediaPipe lọc khung hình | ✅ Xong | Kiosk chỉ gửi khung có 1 khuôn mặt hợp lệ; tư thế khi đăng ký kiểm tra ngay trên trình duyệt |
+| X1 — React Router | ✅ Xong | F5 / Back / Forward / deep-link `/sessions/:id/live`, chặn trang theo vai trò |
+| X2 — Khung nhận diện động | ✅ Xong | Kiểm chứng bằng camera giả trên Chrome: khung + nhãn, sĩ số cập nhật trực tiếp |
+| X3 — Phân trang phía server | ✅ Xong | Sửa luôn lỗi mất tên người dùng thứ 101+ ở mọi màn hình |
+| Phase 4 — Load test (Locust) | ✅ Đã chạy | Kết quả bên dưới |
+
+**Load test cuối (máy dev, 10 kiosk gửi liên tục 1 khung/1,6s + 200 sinh viên, 3 phút):**
+
+| Endpoint | Lỗi | p50 | p95 |
+|---|---|---|---|
+| Đăng nhập (210 lượt) | 0 | 1,2s | 2,0s |
+| `/auth/me`, `/attendance`, hồ sơ khuôn mặt | 0 | 44–98ms | 130–280ms |
+| Nhận diện | 0 lỗi thật; 45% khung bị từ chối nhanh "busy" | 2,1s | 4,0s |
+
+Lỗi phát hiện nhờ load test và đã sửa: giới hạn đăng nhập theo IP chặn cả trường sau 1 NAT (→ khóa theo tài khoản); cạn connection pool do giữ kết nối DB khi chờ AI/bcrypt; request AI xếp hàng tới timeout 10s (→ giới hạn đồng thời + từ chối nhanh).
+
+**Kết luận SLA:** mọi API thường đạt SLA. Kịch bản A (10 lớp điểm danh liên tục) **chưa đạt trên laptop dev** vì CPU dành cho AI chỉ xử lý ~2–4 khung/giây khi chạy chung mọi dịch vụ; hệ thống xuống cấp có kiểm soát (không timeout, không lỗi 500). Thực tế kiosk chỉ gửi khi có mặt người nên tải thấp hơn nhiều so với bài test.
+
 **Việc tiếp theo để đạt kịch bản A:** (1) kiosk chỉ gửi frame khi trình duyệt đã thấy khuôn mặt ổn định (gộp vào G5); (2) chạy trên máy chủ nhiều core hơn; (3) cân nhắc model nhận diện nhẹ hơn (ví dụ `buffalo_s`) — **phải đăng ký lại toàn bộ khuôn mặt** vì embedding khác nhau.
 
 ---
