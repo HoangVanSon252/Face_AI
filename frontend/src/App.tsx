@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { canOpen, parsePath, pathFor } from './lib/routes'
 import { Play } from 'lucide-react'
 import type { Role, View, User, AttendanceLog, AttendanceSession, ClassItem } from './types'
 import { authService, attendanceService, sessionService, classService, faceService } from './services/api'
@@ -38,7 +40,12 @@ function MainApp() {
   const [role, setRole] = useState<Role>('teacher')
   const [currentUser, setCurrentUser] = useState<User | null>(null)
   const [isRestoringSession, setIsRestoringSession] = useState(true)
-  const [activeView, setActiveView] = useState<View>('Tổng quan')
+  // The URL decides the current page (F5, Back/Forward and deep links work).
+  const location = useLocation()
+  const navigate = useNavigate()
+  const route = parsePath(location.pathname)
+  const activeView: View = route.view
+  const setActiveView = useCallback((view: View) => navigate(pathFor(view)), [navigate])
   const [sessionOpen, setSessionOpen] = useState(false)
   const [activeSession, setActiveSession] = useState<AttendanceSession | undefined>(undefined)
   const [showCreateSessionModal, setShowCreateSessionModal] = useState(false)
@@ -63,6 +70,44 @@ function MainApp() {
     const h = (d.getHours() + Math.floor(m / 60)) % 24
     return `${String(h).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
   })
+
+  // Canonical URLs: once the session/class behind a page is known, put its id
+  // in the address so the page can be reloaded or shared.
+  useEffect(() => {
+    if (route.view === 'Chi tiết phiên điểm danh' && !route.sessionId && activeSession?.id) {
+      navigate(pathFor(route.view, { sessionId: activeSession.id }), { replace: true })
+    } else if (route.view === 'Danh sách sinh viên lớp' && !route.rosterClassId && selectedRosterClass) {
+      navigate(pathFor(route.view, { rosterClassId: selectedRosterClass.classId }), { replace: true })
+    }
+  }, [route.view, route.sessionId, route.rosterClassId, activeSession?.id, selectedRosterClass, navigate])
+
+  // Deep link / reload: restore the session or class named in the URL.
+  useEffect(() => {
+    if (!currentUser || !route.sessionId || activeSession?.id === route.sessionId) return
+    let cancelled = false
+    void sessionService.getSessions().then((sessions) => {
+      const target = sessions.find((item) => item.id === route.sessionId)
+      if (cancelled) return
+      if (target) setActiveSession(target)
+      else navigate(pathFor('Tổng quan'), { replace: true })
+    })
+    return () => { cancelled = true }
+  }, [currentUser, route.sessionId, activeSession?.id, navigate])
+
+  useEffect(() => {
+    if (!route.rosterClassId || selectedRosterClass?.classId === route.rosterClassId || availableClasses.length === 0) return
+    const target = availableClasses.find((item) => item.classId === route.rosterClassId)
+    if (target) setSelectedRosterClass(target)
+    else navigate(pathFor('Lớp học'), { replace: true })
+  }, [route.rosterClassId, selectedRosterClass?.classId, availableClasses, navigate])
+
+  // Role guard at the routing layer: unknown or forbidden pages go to the dashboard.
+  useEffect(() => {
+    if (!currentUser) return
+    if (location.pathname === '/' || !canOpen(currentUser.role, route.view)) {
+      navigate(pathFor('Tổng quan'), { replace: true })
+    }
+  }, [currentUser, location.pathname, route.view, navigate])
 
   // Fetch pending review logs, check auth and load classes
   const refreshLogs = async () => {
@@ -180,7 +225,7 @@ function MainApp() {
     const openSession = sessions.find((session) => session.status === 'active')
     setActiveSession(openSession)
     setSessionOpen(Boolean(openSession))
-    setActiveView('Tổng quan')
+    // Stay on a deep-linked page after signing in; '/' is sent to the dashboard by the role guard.
   }
 
   if (isRestoringSession) {

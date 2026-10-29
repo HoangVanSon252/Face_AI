@@ -1124,6 +1124,11 @@ export const faceService = {
     }
   },
 
+  /** Withdraw biometric consent: erases every stored face embedding of the student. */
+  eraseFaceProfile: async (studentId: number): Promise<void> => {
+    await httpClient.delete(`/api/v1/students/${studentId}/face-profile`)
+  },
+
   detectFrame: async (
     image_base64: string
   ): Promise<{

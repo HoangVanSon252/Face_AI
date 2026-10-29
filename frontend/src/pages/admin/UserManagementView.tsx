@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   Users,
   Search,
@@ -19,6 +19,8 @@ import { ConfirmModal } from '../../components/common/ConfirmModal'
 import { useToast } from '../../components/common/Toast'
 import { cn } from '../../lib/utils'
 
+const PAGE_SIZE = 20
+
 interface UserManagementViewProps {
   currentUser?: User
   onUserUpdated?: (user: User) => void
@@ -29,6 +31,10 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
   const [users, setUsers] = useState<User[]>([])
   const [query, setQuery] = useState('')
   const [roleFilter, setRoleFilter] = useState<'all' | Role>('all')
+  // Server-side pagination: only one page of users is ever loaded here.
+  const [page, setPage] = useState(1)
+  const [totalUsers, setTotalUsers] = useState(0)
+  const [debouncedQuery, setDebouncedQuery] = useState('')
 
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [confirmDeleteUser, setConfirmDeleteUser] = useState<User | null>(null)
@@ -50,23 +56,31 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
   const [formRole, setFormRole] = useState<Role>('student')
   const [formDepartment, setFormDepartment] = useState('Khoa Công nghệ thông tin')
 
-  const loadUsers = async () => {
-    const list = await adminUserService.getUsers()
-    setUsers(list)
-  }
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedQuery(query)
+      setPage(1)
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [query])
+
+  const loadUsers = useCallback(async () => {
+    const result = await adminUserService.getUsersPage({
+      page,
+      pageSize: PAGE_SIZE,
+      query: debouncedQuery,
+      role: roleFilter === 'all' ? undefined : roleFilter,
+    })
+    setUsers(result.items)
+    setTotalUsers(result.total)
+  }, [page, debouncedQuery, roleFilter])
 
   useEffect(() => {
-    loadUsers()
-  }, [])
+    void loadUsers()
+  }, [loadUsers])
 
-  const filteredUsers = users.filter((u) => {
-    const matchQuery =
-      u.fullName.toLowerCase().includes(query.toLowerCase()) ||
-      u.userId.toLowerCase().includes(query.toLowerCase()) ||
-      u.email.toLowerCase().includes(query.toLowerCase())
-    const matchRole = roleFilter === 'all' || u.role === roleFilter
-    return matchQuery && matchRole
-  })
+  const totalPages = Math.max(1, Math.ceil(totalUsers / PAGE_SIZE))
+  const filteredUsers = users
 
   const handleToggleStatus = async (user: User) => {
     if (currentUser && (currentUser.id === user.id || currentUser.userId === user.userId)) {
@@ -221,7 +235,10 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
             ).map((r) => (
               <button
                 key={r.id}
-                onClick={() => setRoleFilter(r.id)}
+                onClick={() => {
+                  setRoleFilter(r.id)
+                  setPage(1)
+                }}
                 className={cn(
                   'px-3 py-1.5 text-xs font-semibold rounded-lg transition whitespace-nowrap',
                   roleFilter === r.id
@@ -386,6 +403,36 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Pagination */}
+        <div className="flex items-center justify-between gap-3 px-4 py-3 border-t border-slate-100 text-xs text-slate-500">
+          <span>
+            {totalUsers === 0
+              ? 'Không có tài khoản'
+              : `Hiển thị ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, totalUsers)} / ${totalUsers} tài khoản`}
+          </span>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled={page <= 1}
+              onClick={() => setPage((value) => Math.max(1, value - 1))}
+              className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50"
+            >
+              Trước
+            </button>
+            <span className="px-2 font-semibold text-slate-700">
+              Trang {page} / {totalPages}
+            </span>
+            <button
+              type="button"
+              disabled={page >= totalPages}
+              onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+              className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50"
+            >
+              Sau
+            </button>
+          </div>
         </div>
       </div>
 

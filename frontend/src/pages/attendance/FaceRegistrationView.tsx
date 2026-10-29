@@ -18,11 +18,13 @@ import {
   Calendar,
   Layers,
   Cpu,
+  Trash2,
 } from 'lucide-react'
 import type { Role, User } from '../../types'
 import { faceService } from '../../services/api'
 import { WebcamCapture, type WebcamCaptureHandle } from '../../components/attendance/WebcamCapture'
 import { useToast } from '../../components/common/Toast'
+import { ConfirmModal } from '../../components/common/ConfirmModal'
 import { cn } from '../../lib/utils'
 
 interface FaceRegistrationViewProps {
@@ -156,6 +158,11 @@ export function FaceRegistrationView({
   const baselineRef = useRef<{ yaw: number; pitch: number } | null>(null)
   const firstTurnSignRef = useRef<number | null>(null)
   const captureLockRef = useRef(false)
+  // Explicit biometric consent (Decree 13/2023/ND-CP) before any sample is taken.
+  const [consentGiven, setConsentGiven] = useState(false)
+  const [consentChecked, setConsentChecked] = useState(false)
+  const [showEraseModal, setShowEraseModal] = useState(false)
+  const [isErasing, setIsErasing] = useState(false)
 
   // 1. Fetch real face profile from database on mount
   const loadRealProfile = useCallback(async () => {
@@ -227,17 +234,25 @@ export function FaceRegistrationView({
   // The AI detector validates a real frame before capture. This deliberately
   // replaces browser-only face/luminance heuristics and captures immediately.
   useEffect(() => {
-    if (registered || isSubmitting || samples.length >= 5) {
+    if (registered || isSubmitting || samples.length >= 5 || !consentGiven) {
       setFaceInPosition(false)
       return
     }
     let cancelled = false
     const checkPosition = async () => {
       if (captureLockRef.current || !webcamRef.current?.isCameraActive()) return
-      const video = webcamRef.current.getVideoElement()
-      const frame = webcamRef.current.captureSnapshot()
-      if (!video || !frame || video.videoWidth === 0 || video.videoHeight === 0) return
-      const result = await faceService.detectFrame(frame)
+      const webcam = webcamRef.current
+      const video = webcam.getVideoElement()
+      if (!video || video.videoWidth === 0 || video.videoHeight === 0) return
+      // Pose guidance runs in the browser (MediaPipe); the server detector is
+      // only a fallback for browsers where the WASM detector cannot load.
+      let result = webcam.hasLocalDetector() ? webcam.getLatestDetection() : null
+      if (!result) {
+        if (webcam.hasLocalDetector()) return
+        const frame = webcam.captureSnapshot(false)
+        if (!frame) return
+        result = await faceService.detectFrame(frame)
+      }
       const face = result.face_count === 1 ? result.faces[0] : undefined
       if (!face || face.confidence < 0.7 || face.bbox.length !== 4 || cancelled) {
         if (!cancelled) setFaceInPosition(false)
@@ -290,13 +305,33 @@ export function FaceRegistrationView({
         setIsCapturingNow(false)
       }, 700)
     }
-    const interval = window.setInterval(() => { void checkPosition() }, 850)
+    // Local checks are free, so poll faster; the server fallback keeps 850ms.
+    const intervalMs = webcamRef.current?.hasLocalDetector() ? 300 : 850
+    const interval = window.setInterval(() => { void checkPosition() }, intervalMs)
     void checkPosition()
     return () => {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [registered, isSubmitting, samples.length, currentStepIndex, captureVerifiedSnapshot])
+  }, [registered, isSubmitting, samples.length, currentStepIndex, captureVerifiedSnapshot, consentGiven])
+
+  const handleErase = async () => {
+    setShowEraseModal(false)
+    setIsErasing(true)
+    try {
+      await faceService.eraseFaceProfile(currentUser.id)
+      setProfileData(null)
+      setRegistered(false)
+      setConsentGiven(false)
+      setConsentChecked(false)
+      handleReset()
+      showToast('Đã xóa toàn bộ dữ liệu khuôn mặt và rút lại sự đồng ý.', 'success')
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'Không thể xóa dữ liệu khuôn mặt.', 'error')
+    } finally {
+      setIsErasing(false)
+    }
+  }
 
   const handleReset = () => {
     setSamples([])
@@ -347,6 +382,7 @@ export function FaceRegistrationView({
               showOverlays={true}
               hideDefaultOval={true}
               showControls={false}
+              showFaceBoxes={!registered && consentGiven}
               label={registered ? 'Hồ sơ khuôn mặt đã đăng ký' : 'Camera sinh trắc học'}
               sublabel={registered ? 'Dữ liệu đã sẵn sàng điểm danh' : 'Đưa mặt vào giữa khung hình'}
             >
@@ -366,6 +402,40 @@ export function FaceRegistrationView({
                     <p className="text-xs text-slate-300 mt-1 max-w-xs">
                       Trích xuất véc-tơ đặc trưng ArcFace 512-D và xác thực liveness từ 5 mẫu ảnh.
                     </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Biometric consent: nothing is captured before the student agrees */}
+              {!registered && !consentGiven && !isSubmitting && isStudent && (
+                <div className="absolute inset-0 z-40 bg-slate-900/85 backdrop-blur-sm flex items-center justify-center p-4 pointer-events-auto">
+                  <div className="max-w-md w-full bg-white rounded-xl p-5 text-left text-slate-700 shadow-xl">
+                    <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                      <ShieldCheck size={16} className="text-teal-600" /> Đồng ý xử lý dữ liệu sinh trắc học
+                    </h4>
+                    <ul className="mt-3 space-y-1.5 text-[11px] leading-relaxed list-disc pl-4">
+                      <li>Hệ thống chụp 5 ảnh khuôn mặt để tạo đặc trưng (vector) phục vụ <b>chỉ</b> cho điểm danh.</li>
+                      <li>Ảnh mẫu không được lưu; vector đặc trưng được mã hóa AES-256 trong cơ sở dữ liệu.</li>
+                      <li>Ảnh minh chứng lúc điểm danh chỉ giảng viên lớp xem được và tự động xóa sau thời hạn lưu trữ.</li>
+                      <li>Bạn có thể rút lại sự đồng ý và xóa toàn bộ dữ liệu khuôn mặt bất kỳ lúc nào tại trang này.</li>
+                    </ul>
+                    <label className="mt-3 flex items-start gap-2 text-xs font-medium cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={consentChecked}
+                        onChange={(event) => setConsentChecked(event.target.checked)}
+                      />
+                      Tôi đã đọc và đồng ý cho phép xử lý dữ liệu khuôn mặt của mình theo các điều trên.
+                    </label>
+                    <button
+                      type="button"
+                      disabled={!consentChecked}
+                      onClick={() => setConsentGiven(true)}
+                      className="mt-4 w-full py-2 text-xs font-semibold rounded-lg bg-teal-700 hover:bg-teal-800 disabled:bg-slate-300 text-white transition"
+                    >
+                      Đồng ý và bắt đầu đăng ký
+                    </button>
                   </div>
                 </div>
               )}
@@ -583,7 +653,19 @@ export function FaceRegistrationView({
                   >
                     <RotateCcw size={14} /> Chụp lại khuôn mặt mới
                   </button>
-                ) : (
+                ) : null}
+                {registered && isStudent ? (
+                  <button
+                    type="button"
+                    disabled={isErasing}
+                    onClick={() => setShowEraseModal(true)}
+                    className="mt-2 w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 text-xs font-semibold rounded-lg border border-rose-200 hover:bg-rose-50 text-rose-700 transition disabled:opacity-60"
+                  >
+                    {isErasing ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                    Xóa dữ liệu khuôn mặt &amp; rút lại đồng ý
+                  </button>
+                ) : null}
+                {registered ? null : (
                   <p className="py-2 text-center text-xs font-medium text-slate-500">
                     AI sẽ tự lưu từng mẫu ngay khi bạn làm đúng hướng dẫn trên camera.
                   </p>
@@ -738,6 +820,17 @@ export function FaceRegistrationView({
           </div>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={showEraseModal}
+        title="Xóa dữ liệu khuôn mặt?"
+        message="Toàn bộ vector khuôn mặt của bạn sẽ bị xóa vĩnh viễn và bạn sẽ không thể điểm danh bằng khuôn mặt cho đến khi đăng ký lại."
+        confirmText="Xóa vĩnh viễn"
+        cancelText="Hủy"
+        variant="danger"
+        onConfirm={() => void handleErase()}
+        onCancel={() => setShowEraseModal(false)}
+      />
     </div>
   )
 }

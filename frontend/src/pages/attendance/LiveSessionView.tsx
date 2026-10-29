@@ -11,7 +11,7 @@ import {
 import type { AttendanceSession, AttendanceLog } from '../../types'
 import { attendanceService, sessionService, classService, userService, faceService } from '../../services/api'
 import { AttendanceWebSocketClient, type WsConnectionState } from '../../websocket/attendanceWs'
-import { WebcamCapture } from '../../components/attendance/WebcamCapture'
+import { WebcamCapture, type FaceOverlayStatus } from '../../components/attendance/WebcamCapture'
 import { ConfirmModal } from '../../components/common/ConfirmModal'
 import { useToast } from '../../components/common/Toast'
 import { cn } from '../../lib/utils'
@@ -46,6 +46,18 @@ export function LiveSessionView({ session, onCloseSession, canOperate }: LiveSes
   const [wsStatus, setWsStatus] = useState<WsConnectionState>('connecting')
   const [wsAttempt, setWsAttempt] = useState(0)
   const wsClientRef = useRef<AttendanceWebSocketClient | null>(null)
+  // Colour + label of the live face box; resets to neutral after a verdict.
+  const [faceOverlay, setFaceOverlay] = useState<FaceOverlayStatus | null>(null)
+  const overlayResetRef = useRef<number | undefined>(undefined)
+  const verdictUntilRef = useRef(0)
+  const showVerdict = (status: FaceOverlayStatus) => {
+    // Keep a verdict on screen for 2.5s even while the next frames are analysed.
+    verdictUntilRef.current = Date.now() + 2500
+    setFaceOverlay(status)
+    window.clearTimeout(overlayResetRef.current)
+    overlayResetRef.current = window.setTimeout(() => setFaceOverlay(null), 2500)
+  }
+  useEffect(() => () => window.clearTimeout(overlayResetRef.current), [])
   const [currentTime, setCurrentTime] = useState(new Date().toLocaleTimeString('vi-VN'))
 
   const [feedLogs, setFeedLogs] = useState<AttendanceLog[]>([])
@@ -197,15 +209,31 @@ export function LiveSessionView({ session, onCloseSession, canOperate }: LiveSes
     if (!canOperate || !numericSessionId || numericSessionId <= 0 || recognitionInFlightRef.current) return
     if (Date.now() - lastMatchedAtRef.current < 3500) return
     recognitionInFlightRef.current = true
+    if (Date.now() >= verdictUntilRef.current) {
+      setFaceOverlay({ tone: 'scanning', label: 'Đang phân tích sinh trắc học...' })
+    }
     try {
       const result = await faceService.recognize(numericSessionId, imageBase64)
       if (!result.matched) {
         setScanStatus(result.reason || 'No enrolled face profile matched this frame.')
+        showVerdict(
+          result.reason === 'Liveness verification rejected this frame'
+            ? { tone: 'danger', label: 'Phát hiện giả mạo / ánh sáng yếu' }
+            : { tone: 'warning', label: 'Chưa khớp — vui lòng nhìn thẳng vào camera' }
+        )
       }
       if (result.matched) {
         setScanStatus('Face recognized and attendance saved.')
         lastMatchedAtRef.current = Date.now()
         const logs = await attendanceService.getLogs(String(numericSessionId))
+        const matchedLog = logs.find((log) => log.id === result.attendance_record_id)
+        const matchedName = roster.find((student) => student.code === matchedLog?.studentId)?.name
+        const confidence = Math.round((result.confidence_score ?? 0) * 100)
+        showVerdict({
+          tone: 'success',
+          label: `${matchedLog?.studentId ?? ''}${matchedName ? ` - ${matchedName}` : ''} (${confidence}%)`.trim(),
+        })
+        if (navigator.vibrate) navigator.vibrate(80)
         setFeedLogs(logs)
         setReviewQueue(logs.filter((log) => log.reviewStatus === 'pending'))
         setRoster((previous) => previous.map((student) => {
@@ -236,6 +264,18 @@ export function LiveSessionView({ session, onCloseSession, canOperate }: LiveSes
       }
     } catch (error) {
       if (error instanceof ApiError && (error.status === 409 || error.status === 422)) {
+        if (error.status === 409 && error.message === 'Student has already checked in') {
+          showVerdict({ tone: 'success', label: 'Đã điểm danh trước đó' })
+        } else if (Date.now() >= verdictUntilRef.current) {
+          setFaceOverlay(null)
+        }
+        return
+      }
+      if (Date.now() >= verdictUntilRef.current) setFaceOverlay(null)
+      // Server shedding load (AI busy) or per-session rate limit: skip this frame
+      // quietly, the next one is sent automatically.
+      if (error instanceof ApiError && (error.status === 503 || error.status === 429)) {
+        setScanStatus('Hệ thống đang bận — sẽ thử lại ở khung hình kế tiếp...')
         return
       }
       showToast(error instanceof Error ? error.message : 'Không thể nhận diện khuôn mặt.', 'error')
@@ -347,6 +387,10 @@ export function LiveSessionView({ session, onCloseSession, canOperate }: LiveSes
               onCaptureFrame={handleRecognition}
               autoCapture={true}
               captureIntervalMs={1600}
+              // Only frames with one usable face reach the server (no empty-room uploads).
+              gateWithFaceDetector={true}
+              showFaceBoxes={true}
+              faceOverlay={faceOverlay}
               showScanLine={true}
               showOverlays={true}
               showControls={false}

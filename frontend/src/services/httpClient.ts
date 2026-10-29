@@ -100,6 +100,8 @@ async function refreshAccessToken(): Promise<string | null> {
 interface RequestOptions extends RequestInit {
   skipAuth?: boolean
   isFormUrlEncoded?: boolean
+  /** Receives the final response headers (e.g. X-Total-Count for paginated lists). */
+  onHeaders?: (headers: Headers) => void
 }
 
 /**
@@ -142,8 +144,9 @@ export async function request<T>(endpoint: string, options: RequestOptions = {})
     headers['X-CSRF-Token'] = csrfToken
   }
 
+  const { onHeaders: _onHeaders, ...fetchInit } = options
   const fetchOptions: RequestInit = {
-    ...options,
+    ...fetchInit,
     headers,
     credentials: 'include', // Ensure HttpOnly cookies (refresh_token) are sent
   }
@@ -166,6 +169,7 @@ export async function request<T>(endpoint: string, options: RequestOptions = {})
       headers['Authorization'] = `Bearer ${newToken}`
       const retryResponse = await fetch(url, { ...fetchOptions, headers })
       if (retryResponse.ok) {
+        options.onHeaders?.(retryResponse.headers)
         if (retryResponse.status === 204) {
           notifyDataChanged(endpoint, options.method)
           return {} as T
@@ -176,6 +180,8 @@ export async function request<T>(endpoint: string, options: RequestOptions = {})
       }
     }
   }
+
+  if (response.ok) options.onHeaders?.(response.headers)
 
   if (response.status === 204) {
     notifyDataChanged(endpoint, options.method)
