@@ -1164,3 +1164,65 @@ export const recordAuditLog = (
 ) => {
   // Backend audit service logs actions automatically when endpoints are executed
 }
+
+// ─── Notifications (business events for the signed-in user) ──
+export interface AppNotification {
+  id: number
+  kind: string
+  title: string
+  body: string | null
+  link: string | null
+  is_read: boolean
+  created_at: string
+}
+
+export const notificationService = {
+  list: (limit = 30) =>
+    httpClient.get<{ items: AppNotification[]; unread_count: number }>(`/api/v1/notifications?limit=${limit}`),
+  markRead: async (id: number): Promise<void> => {
+    await httpClient.post(`/api/v1/notifications/${id}/read`)
+  },
+  markAllRead: async (): Promise<void> => {
+    await httpClient.post('/api/v1/notifications/read-all')
+  },
+}
+
+// ─── Ca học detail: classes with head counts and the timetable ─
+export interface SectionOverview {
+  id: number
+  section_code: string
+  room: string | null
+  status: string
+  course: { id: number; code: string; name: string }
+  semester: { id: number; code: string; start_date: string; end_date: string }
+  lecturer: { id: number; full_name: string | null }
+  student_count: number
+  classes: {
+    code: string
+    name: string | null
+    student_count: number
+    students: { id: number; student_code: string; full_name: string }[]
+  }[]
+  sessions: {
+    id: number
+    session_no: number
+    title: string | null
+    status: 'SCHEDULED' | 'OPEN' | 'CLOSED' | 'CANCELLED'
+    scheduled_start_at: string
+    scheduled_end_at: string
+    late_after_at: string
+    record_count: number
+  }[]
+}
+
+export const sectionService = {
+  getOverview: (sectionId: number) =>
+    httpClient.get<SectionOverview>(`/api/v1/academic/sections/${sectionId}/overview`),
+  update: async (sectionId: number, data: { sectionCode?: string; room?: string; lecturerId?: number }): Promise<void> => {
+    await httpClient.patch(`/api/v1/academic/sections/${sectionId}`, {
+      section_code: data.sectionCode,
+      room: data.room,
+      lecturer_id: data.lecturerId,
+    })
+  },
+}

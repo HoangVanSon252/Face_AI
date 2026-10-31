@@ -408,7 +408,6 @@ function MainApp() {
 
           {activeView === 'Môn học' && (
             <ClassManagement
-              key={`classes-${dataVersion}`}
               role={role}
               currentUser={currentUser}
               onStartAttendance={(classId, session) => {

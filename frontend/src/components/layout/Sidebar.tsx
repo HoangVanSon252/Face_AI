@@ -30,7 +30,6 @@ const NAV_ITEMS_BY_ROLE: Record<Role, NavItem[]> = {
     { label: 'Đăng ký khuôn mặt', icon: Camera },
     { label: 'Lịch sử điểm danh', icon: CalendarCheck },
     { label: 'Khiếu nại', icon: ShieldCheck },
-    { label: 'Nhật ký kiểm toán', icon: FileBarChart },
   ],
   teacher: [
     { label: 'Tổng quan', icon: LayoutDashboard },
@@ -39,7 +38,6 @@ const NAV_ITEMS_BY_ROLE: Record<Role, NavItem[]> = {
     { label: 'Điểm danh', icon: CalendarCheck },
     { label: 'Khiếu nại', icon: ShieldCheck },
     { label: 'Báo cáo', icon: FileBarChart },
-    { label: 'Nhật ký kiểm toán', icon: ShieldCheck },
   ],
   admin: [
     { label: 'Tổng quan', icon: LayoutDashboard },

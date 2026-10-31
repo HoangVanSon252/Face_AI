@@ -152,10 +152,12 @@ test.describe('EduFace AI - Browser End-to-End Test Suite', () => {
     const subjectCard = page.locator('button:has-text("Xem ca học")').first();
     if (await subjectCard.isVisible()) {
       await subjectCard.click();
-      const scheduleButton = page.locator('button:has-text("Lịch ca học")').first();
-      if (await scheduleButton.isVisible()) {
-        await scheduleButton.click();
-        await expect(page.locator('text=Lịch học theo kỳ').first()).toBeVisible({ timeout: 5000 });
+      const sectionCard = page.locator('button:has-text("Xem chi tiết ca học")').first();
+      if (await sectionCard.isVisible()) {
+        await sectionCard.click();
+        await expect(page.locator('text=Lớp trong ca học').first()).toBeVisible({ timeout: 5000 });
+        await page.locator('button:has-text("Lập lịch cả kỳ")').first().click();
+        await expect(page.locator('text=Học vào các thứ').first()).toBeVisible({ timeout: 5000 });
       }
     }
     // 6. Close Modal

@@ -14,6 +14,7 @@ from app.models.face import FaceProfile, FaceProfileStatusEnum
 from app.models.user import RoleEnum, Student
 from app.schemas.face import EvidenceUrlResponse, FaceProfileCreate, FaceProfileResponse, RecognitionRequest, RecognitionResponse
 from app.services.ai_client import analyze_face, detect_faces_fast
+from app.services import notifications
 from app.services.audit_service import write_audit_log
 from app.services.realtime import realtime_service
 from app.services.face_matcher import best_match
@@ -225,6 +226,8 @@ def _recognize(session_id: int, data: RecognitionRequest, db: Session, current_u
     )
     db.add(record)
     try:
+        db.flush()
+        notifications.notify_check_in(db, record)
         db.commit()
     except IntegrityError:
         db.rollback()

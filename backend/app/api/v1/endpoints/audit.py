@@ -14,13 +14,11 @@ def list_audit_logs(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=100),
     db: Session = Depends(dependencies.get_db),
-    current_user: User = Depends(dependencies.get_current_active_user),
+    _: User = Depends(dependencies.require_role([RoleEnum.ADMIN.value])),
 ):
+    # The audit trail names endpoints and internal actions: administrators only.
+    # Students and lecturers get business notifications instead (/notifications).
     query = db.query(AuditLog)
-    # Administrators can inspect the complete system audit trail. Other users
-    # can inspect their own security/activity trail without seeing other users.
-    if current_user.role != RoleEnum.ADMIN:
-        query = query.filter(AuditLog.actor_user_id == current_user.id)
     return (
         query
         .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())

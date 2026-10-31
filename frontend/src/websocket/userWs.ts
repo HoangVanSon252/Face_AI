@@ -75,6 +75,8 @@ export class UserWebSocketClient {
                 detail: { role: data.payload.role },
               })
             )
+          } else if (data.event === 'NOTIFICATION') {
+            window.dispatchEvent(new CustomEvent('notification:new', { detail: data.payload }))
           } else if (data.event === 'CLASS_ROSTER_CHANGED') {
             window.dispatchEvent(
               new CustomEvent('class-roster:changed', { detail: data.payload })

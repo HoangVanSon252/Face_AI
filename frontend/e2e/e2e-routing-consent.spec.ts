@@ -62,8 +62,10 @@ test.describe('Routing, deep links and biometric consent', () => {
     await expect(page).toHaveURL(/\/face-registration$/)
 
     const consentButton = page.getByRole('button', { name: 'Đồng ý và bắt đầu đăng ký' })
+    const eraseButton = page.getByRole('button', { name: /Xóa dữ liệu khuôn mặt/ })
     // A student who already has a profile sees the profile instead of the consent card.
-    if (await consentButton.isVisible().catch(() => false)) {
+    await expect(consentButton.or(eraseButton)).toBeVisible({ timeout: 15000 })
+    if (await consentButton.isVisible()) {
       await expect(consentButton).toBeDisabled()
       await page.getByLabel(/Tôi đã đọc và đồng ý/).check()
       await expect(consentButton).toBeEnabled()
@@ -71,7 +73,7 @@ test.describe('Routing, deep links and biometric consent', () => {
       // Nothing was uploaded for pose checks before consent.
       expect(detectFrameCalls).toEqual([])
     } else {
-      await expect(page.getByRole('button', { name: /Xóa dữ liệu khuôn mặt/ })).toBeVisible()
+      await expect(eraseButton).toBeVisible()
     }
   })
 })

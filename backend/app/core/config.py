@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     BIOMETRIC_POLICY_VERSION: str = "2026-10"
     # Attendance evidence photos are deleted after this many days (0 = keep forever).
     EVIDENCE_RETENTION_DAYS: int = 180
+    # Timetables are entered in campus local time and stored as naive UTC.
+    # Vietnam (UTC+7) has no daylight saving, so a fixed offset is exact.
+    APP_UTC_OFFSET_MINUTES: int = 420
 
     @field_validator("DEBUG", mode="before")
     @classmethod

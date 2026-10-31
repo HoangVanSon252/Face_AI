@@ -7,3 +7,4 @@ from app.models.attendance import AttendanceSession, AttendanceRecord, Attendanc
 from app.models.token import RefreshToken
 from app.models.project_task import ProjectTask
 from app.models.audit import AuditLog
+from app.models.notification import Notification

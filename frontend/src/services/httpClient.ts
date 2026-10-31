@@ -114,6 +114,7 @@ function notifyDataChanged(endpoint: string, method?: string): void {
   const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(normalizedMethod)
   const isRealtimePipeline =
     endpoint.includes('/auth/') ||
+    endpoint.includes('/notifications') ||
     endpoint.includes('/face/detect-frame') ||
     endpoint.includes('/recognitions')
 

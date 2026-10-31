@@ -18,6 +18,7 @@ from app.schemas.attendance import (
     AttendanceReviewRequest,
     ManualCheckInCreate,
 )
+from app.services import notifications
 from app.services.audit_service import write_audit_log
 from app.services.realtime import realtime_service
 
@@ -44,6 +45,7 @@ def create_manual_check_in(
         record = crud_attendance.create_manual_check_in(
             db, session, data.student_id, datetime.utcnow(), data.note
         )
+        notifications.notify_check_in(db, record)
         write_audit_log(
             db, action="ATTENDANCE_CREATED", actor_user_id=current_user.id,
             entity_type="ATTENDANCE_RECORD", entity_id=record.id,
@@ -139,6 +141,12 @@ def _review_record(record_id: int, approved: bool, data: AttendanceReviewRequest
         db, action="ATTENDANCE_REVIEW_APPROVED" if approved else "ATTENDANCE_REVIEW_REJECTED",
         actor_user_id=current_user.id, entity_type="ATTENDANCE_RECORD", entity_id=record.id,
     )
+    name = notifications.session_name(record.session)
+    if approved:
+        title = f"Điểm danh {name} đã được xác nhận"
+    else:
+        title = f"Điểm danh {name} bị từ chối, bạn đang bị ghi vắng. Có thể gửi khiếu nại."
+    notifications.notify(db, [record.student_id], "ATTENDANCE_REVIEWED", title, data.note, link="/attendance/history")
     db.commit()
     db.refresh(record)
     return record
@@ -172,6 +180,13 @@ def create_appeal(
             db, action="APPEAL_CREATED", actor_user_id=current_user.id,
             entity_type="ATTENDANCE_APPEAL", entity_id=appeal.id,
             details={"attendance_record_id": record_id},
+        )
+        session = record.session
+        notifications.notify(
+            db, [session.section.lecturer_id], "APPEAL_CREATED",
+            f"Khiếu nại mới từ {current_user.full_name} · {notifications.session_name(session)}",
+            f"{notifications.section_label(session.section)}: {data.reason[:200]}",
+            link="/complaints",
         )
         db.commit()
         db.refresh(appeal)
@@ -218,6 +233,11 @@ def resolve_appeal(
         record.reviewed_by = current_user.id if current_user.role == RoleEnum.LECTURER else None
         record.reviewed_at = datetime.utcnow()
     write_audit_log(db, action="APPEAL_RESOLVED", actor_user_id=current_user.id, entity_type="ATTENDANCE_APPEAL", entity_id=appeal.id, details={"decision": data.decision.value})
+    verdict = "được chấp nhận" if data.decision == AppealStatusEnum.APPROVED else "bị từ chối"
+    notifications.notify(
+        db, [appeal.student_id], "APPEAL_RESOLVED",
+        f"Khiếu nại {notifications.session_name(record.session)} đã {verdict}", data.resolution_note, link="/complaints",
+    )
     db.commit()
     db.refresh(appeal)
     return appeal

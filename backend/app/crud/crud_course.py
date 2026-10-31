@@ -15,7 +15,11 @@ from sqlalchemy.exc import IntegrityError
 def create_semester(db: Session, data: SemesterCreate) -> Semester:
     obj = Semester(**data.model_dump())
     db.add(obj)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise APIException(status_code=409, code="DUPLICATE_SEMESTER", message="Mã học kỳ đã tồn tại.")
     db.refresh(obj)
     return obj
 
@@ -27,7 +31,11 @@ def get_semesters(db: Session):
 def create_course(db: Session, data: CourseCreate) -> Course:
     obj = Course(**data.model_dump())
     db.add(obj)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise APIException(status_code=409, code="DUPLICATE_COURSE", message="Mã môn học đã tồn tại.")
     db.refresh(obj)
     return obj
 

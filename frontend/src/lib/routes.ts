@@ -50,10 +50,10 @@ export function pathFor(view: View, params: { sessionId?: number; rosterClassId?
 
 /** Pages each role may open; anything else redirects to the dashboard. */
 const ROLE_VIEWS: Record<Role, View[]> = {
-  student: ['Tổng quan', 'Đăng ký khuôn mặt', 'Lịch sử điểm danh', 'Khiếu nại', 'Nhật ký kiểm toán'],
+  student: ['Tổng quan', 'Đăng ký khuôn mặt', 'Lịch sử điểm danh', 'Khiếu nại'],
   teacher: [
     'Tổng quan', 'Môn học', 'Lớp học', 'Điểm danh', 'Lịch sử điểm danh', 'Chi tiết phiên điểm danh',
-    'Danh sách sinh viên lớp', 'Khiếu nại', 'Báo cáo', 'Nhật ký kiểm toán', 'Đăng ký khuôn mặt',
+    'Danh sách sinh viên lớp', 'Khiếu nại', 'Báo cáo', 'Đăng ký khuôn mặt',
   ],
   admin: [
     'Tổng quan', 'Người dùng', 'Môn học', 'Lớp học', 'Điểm danh', 'Lịch sử điểm danh',

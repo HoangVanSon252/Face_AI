@@ -1,5 +1,6 @@
 from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
@@ -12,6 +13,7 @@ from app.schemas.course import (
     EnrollmentCreate, EnrollmentResponse,
 )
 from app.models.user import RoleEnum
+from app.services import notifications
 from app.services.realtime import realtime_service
 from app.services.audit_service import write_audit_log
 from app.models.course import SubjectClass, AdministrativeClass, Enrollment, EnrollmentStatusEnum
@@ -23,6 +25,30 @@ class AdministrativeClassPayload(BaseModel):
     code: str = Field(min_length=1, max_length=50)
     name: str | None = Field(default=None, max_length=150)
     department: str | None = Field(default=None, max_length=150)
+
+class ClassSectionUpdate(BaseModel):
+    section_code: str | None = Field(default=None, min_length=1, max_length=40)
+    lecturer_id: int | None = None
+    room: str | None = Field(default=None, max_length=50)
+
+
+def _notify_assignment(db: Session, section, actor_id: int) -> None:
+    notifications.notify(
+        db, notifications.others([section.lecturer_id], actor_id), "SECTION_ASSIGNED",
+        f"Bạn được phân công dạy ca {notifications.section_label(section)}",
+        f"Phòng {section.room}" if section.room else None,
+        link="/subjects",
+    )
+
+
+def _notify_roster(db: Session, section, student_ids: list[int], added: bool) -> None:
+    label = notifications.section_label(section)
+    if added:
+        title, kind = f"Bạn được thêm vào ca học {label}", "ENROLLED"
+    else:
+        title, kind = f"Bạn đã được rút khỏi ca học {label}", "UNENROLLED"
+    notifications.notify(db, student_ids, kind, title, link="/classes")
+
 
 require_admin  = dependencies.require_role([RoleEnum.ADMIN.value])
 require_staff  = dependencies.require_role([RoleEnum.ADMIN.value, RoleEnum.LECTURER.value])
@@ -146,10 +172,14 @@ def create_section(
     db: Session = Depends(dependencies.get_db),
     current_user=Depends(require_staff),
 ):
-    if current_user.role == RoleEnum.LECTURER and not data.lecturer_id:
+    if current_user.role == RoleEnum.LECTURER:
         data.lecturer_id = current_user.id
+    from app.models.user import Lecturer
+    if db.get(Lecturer, data.lecturer_id) is None:
+        raise HTTPException(status_code=422, detail="Hãy chọn giảng viên phụ trách ca học")
     section = crud_course.create_section(db, data)
     write_audit_log(db, action="CLASS_CREATED", actor_user_id=current_user.id, entity_type="CLASS_SECTION", entity_id=section.id, details={"section_code": section.section_code})
+    _notify_assignment(db, section, current_user.id)
     db.commit()
     db.refresh(section)
     return section
@@ -178,6 +208,7 @@ def enroll_student(
     data.section_id = section_id
     enrollment = crud_course.enroll_student(db, data)
     write_audit_log(db, action="STUDENT_ENROLLED", actor_user_id=current_user.id, entity_type="ENROLLMENT", entity_id=enrollment.id, details={"section_id": section_id, "student_id": enrollment.student_id})
+    _notify_roster(db, enrollment.section, [enrollment.student_id], added=True)
     db.commit()
     db.refresh(enrollment)
     # Commit occurs in CRUD before background tasks run; notify every affected
@@ -202,6 +233,7 @@ def unenroll_student(
     if not ok:
         raise HTTPException(status_code=404, detail="Enrollment not found")
     write_audit_log(db, action="STUDENT_UNENROLLED", actor_user_id=current_user.id, entity_type="CLASS_SECTION", entity_id=section_id, details={"student_id": student_id})
+    _notify_roster(db, dependencies.get_section_or_404(db, section_id), [student_id], added=False)
     db.commit()
     payload = {"section_id": section_id, "student_id": student_id, "action": "unenrolled"}
     background_tasks.add_task(realtime_service.send_user_event, current_user.id, "CLASS_ROSTER_CHANGED", payload)
@@ -249,16 +281,32 @@ def delete_course(course_id: int, db: Session = Depends(dependencies.get_db), _:
     db.delete(obj); db.commit()
 
 @router.patch("/sections/{section_id}", response_model=ClassSectionResponse)
-def update_section(section_id: int, data: ClassSectionCreate, db: Session = Depends(dependencies.get_db), current_user=Depends(require_staff)):
-    from app.models.course import ClassSection
-    dependencies.require_section_access(db, section_id, current_user)
-    obj = db.get(ClassSection, section_id)
-    if not obj: raise HTTPException(status_code=404, detail="Section not found")
-    for field, value in data.model_dump().items():
+def update_section(section_id: int, data: ClassSectionUpdate, db: Session = Depends(dependencies.get_db), current_user=Depends(require_staff)):
+    from app.models.user import Lecturer
+    obj = dependencies.require_section_access(db, section_id, current_user)
+    changes = data.model_dump(exclude_unset=True)
+    if "section_code" in changes and changes["section_code"]:
+        changes["section_code"] = changes["section_code"].strip().upper()
+    new_lecturer = changes.get("lecturer_id")
+    if new_lecturer is not None and new_lecturer != obj.lecturer_id:
+        if current_user.role != RoleEnum.ADMIN:
+            raise HTTPException(status_code=403, detail="Chỉ quản trị viên được đổi giảng viên phụ trách")
+        if db.get(Lecturer, new_lecturer) is None:
+            raise HTTPException(status_code=422, detail="Giảng viên không tồn tại")
+    else:
+        changes.pop("lecturer_id", None)
+    for field, value in changes.items():
         if value is not None:
             setattr(obj, field, value)
     write_audit_log(db, action="CLASS_UPDATED", actor_user_id=current_user.id, entity_type="CLASS_SECTION", entity_id=section_id, details={"section_code": obj.section_code})
-    db.commit(); db.refresh(obj); return obj
+    if "lecturer_id" in changes:
+        _notify_assignment(db, obj, current_user.id)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Mã ca học đã tồn tại trong học kỳ này")
+    db.refresh(obj); return obj
 
 @router.delete("/sections/{section_id}", status_code=204)
 def delete_section(section_id: int, db: Session = Depends(dependencies.get_db), current_user=Depends(require_staff)):
@@ -267,6 +315,13 @@ def delete_section(section_id: int, db: Session = Depends(dependencies.get_db), 
     obj = db.get(ClassSection, section_id)
     if not obj: raise HTTPException(status_code=404, detail="Section not found")
     code = obj.section_code
+    from app.models.attendance import AttendanceRecord, AttendanceSession
+    if db.query(AttendanceRecord.id).join(AttendanceSession).filter(AttendanceSession.section_id == section_id).first():
+        raise HTTPException(status_code=409, detail="Ca học đã có dữ liệu điểm danh, không thể xóa")
+    notifications.notify(
+        db, notifications.others(notifications.section_student_ids(db, section_id) + [obj.lecturer_id], current_user.id),
+        "SECTION_DELETED", f"Ca học {notifications.section_label(obj)} đã bị xóa", link="/classes",
+    )
     db.delete(obj)
     write_audit_log(db, action="CLASS_DELETED", actor_user_id=current_user.id, entity_type="CLASS_SECTION", entity_id=section_id, details={"section_code": code})
     db.commit()
@@ -294,13 +349,13 @@ def enroll_administrative_class(
         e.student_id for e in db.query(Enrollment.student_id).filter(Enrollment.section_id == section_id).all()
     }
 
-    added_count = 0
-    for s in students:
-        if s.user_id not in existing_enrolled:
-            db.add(Enrollment(section_id=section_id, student_id=s.user_id, status=EnrollmentStatusEnum.ENROLLED))
-            added_count += 1
+    added = [s.user_id for s in students if s.user_id not in existing_enrolled]
+    for student_id in added:
+        db.add(Enrollment(section_id=section_id, student_id=student_id, status=EnrollmentStatusEnum.ENROLLED))
+    added_count = len(added)
 
     if added_count > 0:
+        _notify_roster(db, section, added, added=True)
         write_audit_log(
             db, action="ADMINISTRATIVE_CLASS_ENROLLED", actor_user_id=current_user.id,
             entity_type="CLASS_SECTION", entity_id=section_id,
@@ -324,6 +379,12 @@ def unenroll_administrative_class(
         s.user_id for s in db.query(Student.user_id).filter(Student.administrative_class == class_code.strip()).all()
     ]
     if student_ids:
+        enrolled = [
+            row.student_id for row in db.query(Enrollment.student_id).filter(
+                Enrollment.section_id == section_id, Enrollment.student_id.in_(student_ids)
+            ).all()
+        ]
+        _notify_roster(db, dependencies.get_section_or_404(db, section_id), enrolled, added=False)
         deleted = db.query(Enrollment).filter(
             Enrollment.section_id == section_id,
             Enrollment.student_id.in_(student_ids)
@@ -369,3 +430,60 @@ def remove_class_from_subject(course_id: int, section_id: int, db: Session = Dep
     db.delete(link)
     write_audit_log(db, action="CLASS_REMOVED_FROM_SUBJECT", actor_user_id=current_user.id, entity_type="COURSE", entity_id=course_id, details={"section_id": section_id})
     db.commit()
+
+
+@router.get("/sections/{section_id}/overview")
+def section_overview(section_id: int, db: Session = Depends(dependencies.get_db), current_user=Depends(require_staff)):
+    """Everything the ca-hoc detail screen shows: classes with head counts and the sessions."""
+    from app.models.attendance import AttendanceRecord, AttendanceSession
+    from app.models.user import Student, User
+    from sqlalchemy import func
+    section = dependencies.require_section_access(db, section_id, current_user)
+    rows = (
+        db.query(Student.user_id, Student.student_code, Student.administrative_class, User.full_name)
+        .join(Enrollment, Enrollment.student_id == Student.user_id)
+        .join(User, User.id == Student.user_id)
+        .filter(Enrollment.section_id == section_id, Enrollment.status == EnrollmentStatusEnum.ENROLLED)
+        .order_by(Student.administrative_class, Student.student_code)
+        .all()
+    )
+    names = {c.code: c.name for c in db.query(AdministrativeClass).all()}
+    groups: dict[str, dict] = {}
+    for row in rows:
+        code = row.administrative_class or ""
+        group = groups.setdefault(code, {"code": code, "name": names.get(code), "students": []})
+        group["students"].append({"id": row.user_id, "student_code": row.student_code, "full_name": row.full_name})
+    for group in groups.values():
+        group["student_count"] = len(group["students"])
+
+    counts = dict(
+        db.query(AttendanceRecord.session_id, func.count(AttendanceRecord.id))
+        .join(AttendanceSession)
+        .filter(AttendanceSession.section_id == section_id)
+        .group_by(AttendanceRecord.session_id)
+        .all()
+    )
+    sessions = db.query(AttendanceSession).filter(AttendanceSession.section_id == section_id).order_by(
+        AttendanceSession.scheduled_start_at, AttendanceSession.session_no
+    ).all()
+    iso = lambda value: value.isoformat() + "Z" if value else None
+    lecturer = db.get(User, section.lecturer_id)
+    return {
+        "id": section.id,
+        "section_code": section.section_code,
+        "room": section.room,
+        "status": section.status.value,
+        "course": {"id": section.course.id, "code": section.course.course_code, "name": section.course.course_name},
+        "semester": {"id": section.semester.id, "code": section.semester.code, "start_date": section.semester.start_date.isoformat(), "end_date": section.semester.end_date.isoformat()},
+        "lecturer": {"id": section.lecturer_id, "full_name": lecturer.full_name if lecturer else None},
+        "student_count": len(rows),
+        "classes": sorted(groups.values(), key=lambda g: (g["code"] == "", g["code"])),
+        "sessions": [
+            {
+                "id": x.id, "session_no": x.session_no, "title": x.title, "status": x.status.value,
+                "scheduled_start_at": iso(x.scheduled_start_at), "scheduled_end_at": iso(x.scheduled_end_at),
+                "late_after_at": iso(x.late_after_at), "record_count": counts.get(x.id, 0),
+            }
+            for x in sessions
+        ],
+    }
