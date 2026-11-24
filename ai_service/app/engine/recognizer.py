@@ -4,13 +4,18 @@ import numpy as np
 from insightface.app import FaceAnalysis
 
 from app.core.config import settings
+from app.engine.onnx_options import session_options
 
 
 @lru_cache(maxsize=1)
 def get_face_app() -> FaceAnalysis:
+    # Only detection (bbox + 5-point kps) and ArcFace embeddings are used; the
+    # 3D/106-point landmark and gender/age models would add CPU to every face.
     app = FaceAnalysis(
         name="buffalo_l",
+        allowed_modules=["detection", "recognition"],
         providers=settings.model_providers_list,
+        sess_options=session_options(),
     )
     app.prepare(ctx_id=-1, det_size=(settings.DETECTION_SIZE,
                 settings.DETECTION_SIZE))

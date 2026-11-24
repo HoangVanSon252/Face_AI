@@ -10,8 +10,8 @@ import {
 } from 'lucide-react'
 import type { AttendanceSession, AttendanceLog } from '../../types'
 import { attendanceService, sessionService, classService, userService, faceService } from '../../services/api'
-import { AttendanceWebSocketClient } from '../../websocket/attendanceWs'
-import { WebcamCapture } from '../../components/attendance/WebcamCapture'
+import { AttendanceWebSocketClient, type WsConnectionState } from '../../websocket/attendanceWs'
+import { WebcamCapture, type FaceOverlayStatus } from '../../components/attendance/WebcamCapture'
 import { ConfirmModal } from '../../components/common/ConfirmModal'
 import { useToast } from '../../components/common/Toast'
 import { cn } from '../../lib/utils'
@@ -43,7 +43,21 @@ export function LiveSessionView({ session, onCloseSession, canOperate }: LiveSes
   const sessionTitle = session?.title || activeSessionId
 
   const [showCloseModal, setShowCloseModal] = useState(false)
-  const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'offline'>('connecting')
+  const [wsStatus, setWsStatus] = useState<WsConnectionState>('connecting')
+  const [wsAttempt, setWsAttempt] = useState(0)
+  const wsClientRef = useRef<AttendanceWebSocketClient | null>(null)
+  // Colour + label of the live face box; resets to neutral after a verdict.
+  const [faceOverlay, setFaceOverlay] = useState<FaceOverlayStatus | null>(null)
+  const overlayResetRef = useRef<number | undefined>(undefined)
+  const verdictUntilRef = useRef(0)
+  const showVerdict = (status: FaceOverlayStatus) => {
+    // Keep a verdict on screen for 2.5s even while the next frames are analysed.
+    verdictUntilRef.current = Date.now() + 2500
+    setFaceOverlay(status)
+    window.clearTimeout(overlayResetRef.current)
+    overlayResetRef.current = window.setTimeout(() => setFaceOverlay(null), 2500)
+  }
+  useEffect(() => () => window.clearTimeout(overlayResetRef.current), [])
   const [currentTime, setCurrentTime] = useState(new Date().toLocaleTimeString('vi-VN'))
 
   const [feedLogs, setFeedLogs] = useState<AttendanceLog[]>([])
@@ -113,39 +127,47 @@ export function LiveSessionView({ session, onCloseSession, canOperate }: LiveSes
       return
     }
     const client = new AttendanceWebSocketClient(numericSessionId)
-    client.connect()
-    setWsStatus('connecting')
+    wsClientRef.current = client
+
+    const refreshFromServer = async () => {
+      const logs = await attendanceService.getLogs(String(numericSessionId))
+      setFeedLogs(logs)
+      setReviewQueue(logs.filter((log) => log.reviewStatus === 'pending'))
+      setRoster((previous) => previous.map((student) => {
+        const log = logs.find((item) => item.studentId === student.code)
+        if (!log) return student
+        const isPresent = log.status === 'present' || log.status === 'late'
+        const isLate = log.status === 'late'
+        return {
+          ...student,
+          present: isPresent,
+          isLate,
+          lateMinutes: log.lateMinutes,
+          time: log.checkInTime,
+          confidence: log.confidenceScore,
+        }
+      }))
+    }
 
     const unsubscribe = client.subscribe(async (msg) => {
       if (msg.type === 'attendance_detected') {
-        const logs = await attendanceService.getLogs(String(numericSessionId))
-        setFeedLogs(logs)
-        setReviewQueue(logs.filter((log) => log.reviewStatus === 'pending'))
-        setRoster((previous) => previous.map((student) => {
-          const log = logs.find((item) => item.studentId === student.code)
-          if (!log) return student
-          const isPresent = log.status === 'present' || log.status === 'late'
-          const isLate = log.status === 'late'
-          return {
-            ...student,
-            present: isPresent,
-            isLate,
-            lateMinutes: log.lateMinutes,
-            time: log.checkInTime,
-            confidence: log.confidenceScore,
-          }
-        }))
+        await refreshFromServer()
         showToast('Đã ghi nhận một lượt nhận diện mới.', 'success')
-      } else if (msg.type === 'session_status') {
-        setWsStatus('connected')
-      } else if (msg.type === 'error') {
-        setWsStatus('offline')
+      } else if (msg.type === 'connection') {
+        setWsStatus(msg.payload.state as WsConnectionState)
+        setWsAttempt(Number(msg.payload.attempt) || 0)
+        // Events published while offline are not replayed: reload the feed.
+        if (msg.payload.state === 'connected' && msg.payload.resumed) {
+          await refreshFromServer()
+        }
       }
     })
+    client.connect()
 
     return () => {
       unsubscribe()
       client.disconnect()
+      wsClientRef.current = null
     }
   }, [canOperate, numericSessionId, showToast])
 
@@ -187,15 +209,31 @@ export function LiveSessionView({ session, onCloseSession, canOperate }: LiveSes
     if (!canOperate || !numericSessionId || numericSessionId <= 0 || recognitionInFlightRef.current) return
     if (Date.now() - lastMatchedAtRef.current < 3500) return
     recognitionInFlightRef.current = true
+    if (Date.now() >= verdictUntilRef.current) {
+      setFaceOverlay({ tone: 'scanning', label: 'Đang phân tích sinh trắc học...' })
+    }
     try {
       const result = await faceService.recognize(numericSessionId, imageBase64)
       if (!result.matched) {
         setScanStatus(result.reason || 'No enrolled face profile matched this frame.')
+        showVerdict(
+          result.reason === 'Liveness verification rejected this frame'
+            ? { tone: 'danger', label: 'Phát hiện giả mạo / ánh sáng yếu' }
+            : { tone: 'warning', label: 'Chưa khớp — vui lòng nhìn thẳng vào camera' }
+        )
       }
       if (result.matched) {
         setScanStatus('Face recognized and attendance saved.')
         lastMatchedAtRef.current = Date.now()
         const logs = await attendanceService.getLogs(String(numericSessionId))
+        const matchedLog = logs.find((log) => log.id === result.attendance_record_id)
+        const matchedName = roster.find((student) => student.code === matchedLog?.studentId)?.name
+        const confidence = Math.round((result.confidence_score ?? 0) * 100)
+        showVerdict({
+          tone: 'success',
+          label: `${matchedLog?.studentId ?? ''}${matchedName ? ` - ${matchedName}` : ''} (${confidence}%)`.trim(),
+        })
+        if (navigator.vibrate) navigator.vibrate(80)
         setFeedLogs(logs)
         setReviewQueue(logs.filter((log) => log.reviewStatus === 'pending'))
         setRoster((previous) => previous.map((student) => {
@@ -226,6 +264,18 @@ export function LiveSessionView({ session, onCloseSession, canOperate }: LiveSes
       }
     } catch (error) {
       if (error instanceof ApiError && (error.status === 409 || error.status === 422)) {
+        if (error.status === 409 && error.message === 'Student has already checked in') {
+          showVerdict({ tone: 'success', label: 'Đã điểm danh trước đó' })
+        } else if (Date.now() >= verdictUntilRef.current) {
+          setFaceOverlay(null)
+        }
+        return
+      }
+      if (Date.now() >= verdictUntilRef.current) setFaceOverlay(null)
+      // Server shedding load (AI busy) or per-session rate limit: skip this frame
+      // quietly, the next one is sent automatically.
+      if (error instanceof ApiError && (error.status === 503 || error.status === 429)) {
+        setScanStatus('Hệ thống đang bận — sẽ thử lại ở khung hình kế tiếp...')
         return
       }
       showToast(error instanceof Error ? error.message : 'Không thể nhận diện khuôn mặt.', 'error')
@@ -337,6 +387,10 @@ export function LiveSessionView({ session, onCloseSession, canOperate }: LiveSes
               onCaptureFrame={handleRecognition}
               autoCapture={true}
               captureIntervalMs={1600}
+              // Only frames with one usable face reach the server (no empty-room uploads).
+              gateWithFaceDetector={true}
+              showFaceBoxes={true}
+              faceOverlay={faceOverlay}
               showScanLine={true}
               showOverlays={true}
               showControls={false}
@@ -351,9 +405,24 @@ export function LiveSessionView({ session, onCloseSession, canOperate }: LiveSes
             <span className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500" /> Webcam kết nối ổn định
             </span>
-            <span className={cn('font-medium', wsStatus === 'connected' ? 'text-teal-600' : 'text-amber-600')}>
-              WebSocket: {wsStatus === 'connected' ? 'Đang truyền trực tiếp' : 'Đang kết nối...'}
-            </span>
+            {wsStatus === 'offline' ? (
+              <button
+                type="button"
+                onClick={() => wsClientRef.current?.reconnectNow()}
+                className="font-medium text-rose-600 underline underline-offset-2"
+              >
+                🔴 Mất kết nối máy chủ — bấm để kết nối lại
+              </button>
+            ) : (
+              <span
+                aria-live="polite"
+                className={cn('font-medium', wsStatus === 'connected' ? 'text-teal-600' : 'text-amber-600')}
+              >
+                {wsStatus === 'connected' && '🟢 Đã kết nối thời gian thực'}
+                {wsStatus === 'connecting' && '🟡 Đang kết nối...'}
+                {wsStatus === 'reconnecting' && `🟡 Mạng gián đoạn — đang thử kết nối lại (lần ${Math.max(wsAttempt, 1)})...`}
+              </span>
+            )}
           </div>
 
         </div>

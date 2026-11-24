@@ -79,7 +79,7 @@ export function AdminDashboard({ onGoToUsers, onGoToAuditLogs }: AdminDashboardP
   return (
     <div className="space-y-6">
       {/* Admin Stat Cards (Dữ liệu THẬT 100% từ Database) */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      <section className="stagger grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
           icon={Users}
           label="TỔNG NGƯỜI DÙNG"
@@ -97,9 +97,9 @@ export function AdminDashboard({ onGoToUsers, onGoToAuditLogs }: AdminDashboardP
         />
         <StatCard
           icon={Clock3}
-          label="LỚP HỌC PHẦN"
+          label="CA HỌC"
           value={loading ? '...' : String(classes.length)}
-          detail={`Học kỳ 1 (2026-2027)`}
+          detail="Tất cả ca học đang mở"
           tone="amber"
         />
         <StatCard
@@ -272,7 +272,7 @@ function StatCard({
   }
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200/80 p-4 shadow-xs hover:border-slate-300 transition-all flex items-start gap-3.5">
+    <div className="lift bg-white rounded-xl border border-slate-200/80 p-4 shadow-xs flex items-start gap-3.5">
       <div
         className={cn(
           'w-10 h-10 rounded-lg flex items-center justify-center shrink-0 border',

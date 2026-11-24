@@ -13,4 +13,7 @@ COPY . .
 EXPOSE 8000
 
 # Khởi động: update DB → seed data → chạy API
-CMD ["sh", "-c", "until python -c 'from app.database import engine; connection = engine.connect(); connection.close()'; do echo 'Waiting for MySQL...'; sleep 2; done; alembic upgrade head; exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Multi-worker uvicorn: prometheus_client aggregates per-process files from this dir.
+ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
+RUN mkdir -p /tmp/prometheus
+CMD ["sh", "-c", "rm -rf $PROMETHEUS_MULTIPROC_DIR && mkdir -p $PROMETHEUS_MULTIPROC_DIR; until python -c 'from app.database import engine; connection = engine.connect(); connection.close()'; do echo 'Waiting for MySQL...'; sleep 2; done; alembic upgrade head; exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${BACKEND_WORKERS:-1} --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-127.0.0.1}"]

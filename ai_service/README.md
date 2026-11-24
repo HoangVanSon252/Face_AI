@@ -37,3 +37,23 @@ ai_service/
    - Chạy qua `recognizer.py` để biến khuôn mặt thành một dãy số (vector embedding).
 4. **AI Service** trả vector này về cho **Backend**. Backend tiến hành so sánh vector với database (dùng PGVector hoặc thuật toán so sánh cosine) để tìm ra sinh viên.
 
+
+## Chống giả mạo (MiniFASNet)
+
+Hệ thống dùng ensemble 2 model **MiniFASNetV2 (crop 2,7×)** và **MiniFASNetV1SE (crop 4,0×)**
+của [Silent-Face-Anti-Spoofing](https://github.com/minivision-ai/Silent-Face-Anti-Spoofing)
+(Apache-2.0, giấy phép đi kèm tại `models/MiniFASNet-LICENSE.txt`). File `.onnx` không commit
+vào Git; mỗi máy/môi trường deploy tự build một lần từ trọng số chính thức:
+
+```sh
+sh scripts/liveness/build_models.sh   # cần Docker; kiểm SHA-256 trọng số + so khớp ONNX với PyTorch
+```
+
+Sau đó đặt các biến `LIVENESS_*` theo `.env.example`. Điểm liveness là trung bình xác suất
+"mặt thật" của 2 model; khung hình bị từ chối khi điểm < `LIVENESS_THRESHOLD`.
+
+- Ngoài môi trường `development` + `DEBUG=true`, thiếu model thì `/health` trả 503 (fail closed).
+- **Hiệu chỉnh ngưỡng** bằng webcam thật tại phòng học: thử mặt thật, ảnh in, ảnh trên điện thoại
+  dưới ánh sáng thực tế rồi chỉnh `LIVENESS_THRESHOLD` (mặc định 0,80).
+
+Chạy test: `docker compose run --rm --no-deps ai_service sh -c "pip install -q -r requirements-dev.txt && python -m pytest -q tests"`

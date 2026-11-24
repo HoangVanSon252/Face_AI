@@ -1,5 +1,11 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { Camera, CameraOff, FlipHorizontal, RefreshCw } from 'lucide-react'
+import {
+  detectFacesInVideo,
+  isFrameWorthSending,
+  loadFaceDetector,
+  type FrameDetection,
+} from '../../lib/faceDetector'
 
 export interface WebcamCaptureHandle {
   captureSnapshot: (notify?: boolean) => string | undefined
@@ -7,7 +13,28 @@ export interface WebcamCaptureHandle {
   isCameraActive: () => boolean
   startCamera: () => Promise<void>
   stopCamera: () => void
+  /** Latest in-browser detection, or null when the local detector is unavailable. */
+  getLatestDetection: () => FrameDetection | null
+  /** True once the local detector has loaded (false = server fallback). */
+  hasLocalDetector: () => boolean
 }
+
+/** Colour/label of the live face box, driven by the latest server verdict. */
+export interface FaceOverlayStatus {
+  tone: 'scanning' | 'success' | 'warning' | 'danger'
+  label?: string
+}
+
+const OVERLAY_COLORS: Record<FaceOverlayStatus['tone'], string> = {
+  scanning: '#f59e0b', // amber: analysing
+  success: '#10b981', // emerald: recognised
+  warning: '#f59e0b', // amber: not matched / adjust position
+  danger: '#f43f5e', // rose: spoof suspected / low light
+}
+const DETECTION_INTERVAL_MS = 120
+// Frames sent to the server are downscaled to this width and JPEG-compressed.
+const MAX_UPLOAD_WIDTH = 640
+const UPLOAD_JPEG_QUALITY = 0.8
 
 export interface WebcamCaptureProps {
   isScanning?: boolean
@@ -24,6 +51,11 @@ export interface WebcamCaptureProps {
   sublabel?: string
   overlayText?: string
   children?: React.ReactNode
+  /** Run the in-browser detector; autoCapture then only uploads frames with one usable face. */
+  gateWithFaceDetector?: boolean
+  /** Draw live bounding boxes over the video. */
+  showFaceBoxes?: boolean
+  faceOverlay?: FaceOverlayStatus | null
 }
 
 export const WebcamCapture = forwardRef<WebcamCaptureHandle, WebcamCaptureProps>(
@@ -43,11 +75,21 @@ export const WebcamCapture = forwardRef<WebcamCaptureHandle, WebcamCaptureProps>
       sublabel = 'Đặt khuôn mặt vào giữa khung hình',
       overlayText = 'Camera HD · Khung quét khuôn mặt',
       children,
+      gateWithFaceDetector = false,
+      showFaceBoxes = false,
+      faceOverlay = null,
     },
     ref
   ) {
     const videoRef = useRef<HTMLVideoElement>(null)
+    const canvasRef = useRef<HTMLCanvasElement>(null)
     const streamRef = useRef<MediaStream | null>(null)
+    const detectionRef = useRef<FrameDetection | null>(null)
+    const localDetectorRef = useRef(false)
+    const overlayRef = useRef<FaceOverlayStatus | null>(faceOverlay)
+    useEffect(() => {
+      overlayRef.current = faceOverlay
+    }, [faceOverlay])
     const [cameraActive, setCameraActive] = useState<boolean>(false)
     const [hasPermissionError, setHasPermissionError] = useState<boolean>(false)
     // The preview is a mirror by default; captured pixels remain native for AI.
@@ -96,12 +138,15 @@ export const WebcamCapture = forwardRef<WebcamCaptureHandle, WebcamCaptureProps>
     const captureSnapshot = (notify = true): string | undefined => {
       if (videoRef.current && cameraActive) {
         const canvas = document.createElement('canvas')
-        canvas.width = videoRef.current.videoWidth || 640
-        canvas.height = videoRef.current.videoHeight || 480
+        const sourceWidth = videoRef.current.videoWidth || 640
+        const sourceHeight = videoRef.current.videoHeight || 480
+        const scale = Math.min(1, MAX_UPLOAD_WIDTH / sourceWidth)
+        canvas.width = Math.round(sourceWidth * scale)
+        canvas.height = Math.round(sourceHeight * scale)
         const ctx = canvas.getContext('2d')
         if (ctx) {
           ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height)
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
+          const dataUrl = canvas.toDataURL('image/jpeg', UPLOAD_JPEG_QUALITY)
           if (notify) onCaptureFrame?.(dataUrl)
           return dataUrl
         }
@@ -110,12 +155,87 @@ export const WebcamCapture = forwardRef<WebcamCaptureHandle, WebcamCaptureProps>
       return undefined
     }
 
+    // Local detection loop: feeds the capture gate and the bounding-box overlay.
+    const needsDetector = gateWithFaceDetector || showFaceBoxes
+    useEffect(() => {
+      if (!needsDetector || !cameraActive) return
+      let cancelled = false
+      let timer: number | undefined
+      const draw = (detection: FrameDetection | null) => {
+        const canvas = canvasRef.current
+        const video = videoRef.current
+        if (!canvas || !video) return
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+        if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+          canvas.width = video.videoWidth
+          canvas.height = video.videoHeight
+        }
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+        if (!showFaceBoxes || !detection) return
+        const status = overlayRef.current
+        const color = status ? OVERLAY_COLORS[status.tone] : '#2dd4bf'
+        const lineWidth = Math.max(2, canvas.width / 320)
+        const fontSize = Math.max(12, canvas.width / 40)
+        ctx.lineWidth = lineWidth
+        ctx.strokeStyle = color
+        ctx.font = `600 ${fontSize}px system-ui, sans-serif`
+        detection.faces.forEach((face) => {
+          const [left, top, right, bottom] = face.bbox
+          // The preview is mirrored with CSS; mirror the box coordinates instead
+          // of the canvas so labels stay readable.
+          const x = mirrorPreview ? canvas.width - right : left
+          const width = right - left
+          ctx.beginPath()
+          ctx.roundRect(x, top, width, bottom - top, lineWidth * 4)
+          ctx.stroke()
+          if (status?.label && detection.face_count === 1) {
+            const padding = lineWidth * 2
+            const textWidth = ctx.measureText(status.label).width
+            const labelHeight = fontSize + padding * 2
+            const labelY = Math.max(0, top - labelHeight - lineWidth)
+            ctx.fillStyle = color
+            ctx.fillRect(x, labelY, textWidth + padding * 2, labelHeight)
+            ctx.fillStyle = '#ffffff'
+            ctx.textBaseline = 'top'
+            ctx.fillText(status.label, x + padding, labelY + padding)
+          }
+        })
+      }
+      void loadFaceDetector().then((detector) => {
+        if (cancelled || !detector) return
+        localDetectorRef.current = true
+        const tick = () => {
+          if (cancelled) return
+          const video = videoRef.current
+          const detection = video ? detectFacesInVideo(detector, video) : null
+          detectionRef.current = detection
+          draw(detection)
+          timer = window.setTimeout(tick, DETECTION_INTERVAL_MS)
+        }
+        tick()
+      })
+      return () => {
+        cancelled = true
+        if (timer) window.clearTimeout(timer)
+        detectionRef.current = null
+        draw(null)
+      }
+    }, [needsDetector, cameraActive, showFaceBoxes, mirrorPreview])
+
     useEffect(() => {
       if (!autoCapture || !cameraActive || !onCaptureFrame) return
       let cancelled = false
       let inFlight = false
       const captureForScan = async () => {
         if (cancelled || inFlight) return
+        // Gate: without exactly one usable face in view, do not upload anything.
+        // If the local detector failed to load, frames are sent as before.
+        if (gateWithFaceDetector && localDetectorRef.current) {
+          const video = videoRef.current
+          const detection = detectionRef.current
+          if (!video || !detection || !isFrameWorthSending(detection, video.videoWidth, video.videoHeight)) return
+        }
         const frame = captureSnapshot(false)
         if (!frame) return
         inFlight = true
@@ -131,7 +251,7 @@ export const WebcamCapture = forwardRef<WebcamCaptureHandle, WebcamCaptureProps>
         cancelled = true
         window.clearInterval(timer)
       }
-    }, [autoCapture, cameraActive, captureIntervalMs, onCaptureFrame])
+    }, [autoCapture, cameraActive, captureIntervalMs, onCaptureFrame, gateWithFaceDetector])
 
     useImperativeHandle(ref, () => ({
       captureSnapshot,
@@ -139,6 +259,8 @@ export const WebcamCapture = forwardRef<WebcamCaptureHandle, WebcamCaptureProps>
       isCameraActive: () => cameraActive,
       startCamera,
       stopCamera,
+      getLatestDetection: () => detectionRef.current,
+      hasLocalDetector: () => localDetectorRef.current,
     }))
 
     return (
@@ -184,6 +306,15 @@ export const WebcamCapture = forwardRef<WebcamCaptureHandle, WebcamCaptureProps>
               transform: mirrorPreview ? 'scaleX(-1)' : 'none',
             }}
           />
+
+          {needsDetector && (
+            <canvas
+              ref={canvasRef}
+              aria-hidden="true"
+              className="absolute inset-0 w-full h-full object-cover z-10 pointer-events-none"
+              style={{ display: cameraActive ? 'block' : 'none' }}
+            />
+          )}
 
           {!cameraActive && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-slate-400">

@@ -82,3 +82,9 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Temporary build workspace (scripts/liveness/build_models.sh)
+.cache/
+
+# Local backups written by the db-backup compose service
+/backups/

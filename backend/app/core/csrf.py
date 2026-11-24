@@ -10,8 +10,10 @@ Cách hoạt động:
    - Cookie "refresh_token" (browser tự gửi)
    - Header "X-CSRF-Token": <giá trị từ cookie csrf_token>
 
-3. Server verify: CSRF header == CSRF cookie → hợp lệ
-   → Chặn CSRF vì trang độc hại không thể đọc cookie để lấy CSRF token
+3. Server verify: CSRF header == CSRF cookie VÀ chữ ký HMAC(CSRF_SECRET_KEY)
+   của token khớp với refresh token hiện tại → hợp lệ
+   → Chặn CSRF vì trang độc hại không thể đọc cookie để lấy CSRF token,
+     và không thể cấy (cookie tossing) token của phiên khác
 
 Tại sao an toàn hơn lưu vào localStorage:
    - HttpOnly cookie: XSS không thể đánh cắp refresh token
@@ -24,19 +26,35 @@ from fastapi import Cookie, Header, HTTPException, status, Response, Request
 from app.core.config import settings
 
 
-def generate_csrf_token() -> str:
-    """Tạo CSRF token ngẫu nhiên 32 bytes."""
-    return secrets.token_urlsafe(32)
+def _signature(nonce: str, refresh_token: str) -> str:
+    message = f"{nonce}.{refresh_token}".encode()
+    return hmac.new(settings.CSRF_SECRET_KEY.encode(), message, hashlib.sha256).hexdigest()
+
+
+def generate_csrf_token(refresh_token: str) -> str:
+    """Signed token "<nonce>.<hmac>": the HMAC binds it to this login's refresh token,
+    so a token planted from another session (cookie tossing) does not verify."""
+    nonce = secrets.token_urlsafe(32)
+    return f"{nonce}.{_signature(nonce, refresh_token)}"
+
+
+def _is_valid_signature(token: str, refresh_token: str) -> bool:
+    nonce, _, signature = token.partition(".")
+    return bool(nonce and signature) and hmac.compare_digest(signature, _signature(nonce, refresh_token))
 
 
 def verify_csrf_token(
     csrf_token_cookie: str | None = Cookie(default=None, alias="csrf_token"),
     x_csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
+    refresh_token: str | None = Cookie(default=None),
 ) -> None:
     """
-    Dependency để verify CSRF token theo Double Submit Cookie pattern.
+    Dependency verify CSRF: Double Submit Cookie + chữ ký HMAC gắn với refresh token.
     Dùng hmac.compare_digest để chống timing attack.
+    Không có refresh token thì không có gì để bảo vệ (refresh/logout đều vô hại).
     """
+    if not refresh_token:
+        return
     if not csrf_token_cookie or not x_csrf_token:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -47,6 +65,11 @@ def verify_csrf_token(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="CSRF token mismatch",
         )
+    if not _is_valid_signature(x_csrf_token, refresh_token):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="CSRF token signature is invalid",
+        )
 
 
 def set_auth_cookies(response: Response, refresh_token: str) -> str:
@@ -56,7 +79,7 @@ def set_auth_cookies(response: Response, refresh_token: str) -> str:
     2. csrf_token (readable – JS đọc để gửi kèm header)
     Trả về csrf_token để có thể dùng ở nơi khác nếu cần.
     """
-    csrf_token = generate_csrf_token()
+    csrf_token = generate_csrf_token(refresh_token)
     max_age = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60  # seconds
 
     # Cookie 1: Refresh Token – HttpOnly (XSS proof)

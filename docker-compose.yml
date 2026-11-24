@@ -1,44 +1,50 @@
+# Base stack (production-safe): only the frontend (Nginx) is published.
+# Local development also loads docker-compose.override.yml automatically, which
+# publishes MySQL/Redis/backend/AI ports on 127.0.0.1 for debugging tools.
+# Production: docker compose -f docker-compose.yml up -d
 services:
   mysql:
-    image: mysql:8.0
+    image: mysql:8.0.46
     container_name: face_attendance_db
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
       MYSQL_DATABASE: ${MYSQL_DB:-face_attendance_db}
-    ports:
-      - "3306:3306"
+    # max_connections must exceed (DB_POOL_SIZE + DB_MAX_OVERFLOW) x BACKEND_WORKERS.
+    command:
+      - --max_connections=${MYSQL_MAX_CONNECTIONS:-200}
+      - --innodb_buffer_pool_size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-512M}
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -p$$MYSQL_ROOT_PASSWORD"]
+      # MYSQL_PWD keeps the password out of the process argument list.
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_ROOT_PASSWORD\" mysqladmin ping -h localhost -uroot"]
       interval: 10s
       timeout: 5s
       retries: 10
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.11-alpine
     container_name: face_attendance_redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\""]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 10
 
   object-storage:
     # SeaweedFS exposes an S3-compatible API and remains publicly pullable.
-    image: chrislusf/seaweedfs:latest
+    image: chrislusf/seaweedfs:4.48
     container_name: face_attendance_object_storage
     restart: unless-stopped
     environment:
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in .env}
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
       S3_BUCKET: face-attendance
-    ports:
-      - "8333:8333"
     volumes:
       - minio_data:/data
 
@@ -47,10 +53,18 @@ services:
     restart: unless-stopped
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
-      DEBUG: "true"
+      # The det_score liveness heuristic is only allowed when ENVIRONMENT=development
+      # and DEBUG=true; any other combination fails closed without a model.
+      DEBUG: ${DEBUG:-false}
       MODEL_PROVIDERS: CPUExecutionProvider
       DETECTION_SIZE: 640
-      # Put the tested .onnx file in ai_service/models and set this to /models/<file>.onnx in .env.
+      # Each worker loads its own models (~0.5-1GB RAM). Keep
+      # AI_WORKERS x ONNX_INTRA_OP_THREADS <= CPU cores given to this container.
+      AI_WORKERS: ${AI_WORKERS:-3}
+      ONNX_INTRA_OP_THREADS: ${ONNX_INTRA_OP_THREADS:-2}
+      # Anti-spoofing ensemble built by scripts/liveness/build_models.sh into ai_service/models.
+      LIVENESS_MODELS: ${LIVENESS_MODELS:-}
+      LIVENESS_OUTPUT_TYPE: ${LIVENESS_OUTPUT_TYPE:-auto}
       LIVENESS_MODEL_PATH: ${LIVENESS_MODEL_PATH:-}
       LIVENESS_THRESHOLD: ${LIVENESS_THRESHOLD:-0.85}
       LIVENESS_INPUT_WIDTH: ${LIVENESS_INPUT_WIDTH:-112}
@@ -59,8 +73,6 @@ services:
       LIVENESS_COLOR_SPACE: ${LIVENESS_COLOR_SPACE:-RGB}
       LIVENESS_NORMALIZATION: ${LIVENESS_NORMALIZATION:-zero_one}
       LIVENESS_LIVE_CLASS_INDEX: ${LIVENESS_LIVE_CLASS_INDEX:-1}
-    ports:
-      - "8002:8002"
     volumes:
       - ./ai_service/models:/models:ro
       - ./scripts:/app/scripts:ro
@@ -72,23 +84,43 @@ services:
       retries: 10
       start_period: 300s
 
+  # Least-privilege DB account for the backend, refreshed on every `up`.
+  mysql-init:
+    image: mysql:8.0.46
+    restart: "no"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      MYSQL_DB: ${MYSQL_DB:-face_attendance_db}
+      MYSQL_APP_USER: ${MYSQL_APP_USER:-eduface_app}
+      MYSQL_APP_PASSWORD: ${MYSQL_APP_PASSWORD:?Set MYSQL_APP_PASSWORD in .env}
+    volumes:
+      - ./scripts/mysql/ensure-app-user.sh:/ensure-app-user.sh:ro
+    entrypoint: ["sh", "/ensure-app-user.sh"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+
   backend:
     build: ./backend
     restart: unless-stopped
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    environment:
-      MYSQL_USER: ${MYSQL_USER:-root}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+    environment: &backend-env
+      # The backend never uses the MySQL root account.
+      MYSQL_USER: ${MYSQL_APP_USER:-eduface_app}
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?Set MYSQL_APP_PASSWORD in .env}
       MYSQL_HOST: ${MYSQL_HOST:-mysql}
       MYSQL_PORT: ${MYSQL_PORT:-3306}
       MYSQL_DB: ${MYSQL_DB:-face_attendance_db}
       MYSQL_SSL_REQUIRED: ${MYSQL_SSL_REQUIRED:-false}
       MYSQL_SSL_CA: ${MYSQL_SSL_CA:-}
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/0
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
       CSRF_SECRET_KEY: ${CSRF_SECRET_KEY:?Set CSRF_SECRET_KEY in .env}
+      FACE_EMBEDDING_KEY: ${FACE_EMBEDDING_KEY:?Set FACE_EMBEDDING_KEY in .env}
+      BIOMETRIC_POLICY_VERSION: ${BIOMETRIC_POLICY_VERSION:-2026-10}
+      EVIDENCE_RETENTION_DAYS: ${EVIDENCE_RETENTION_DAYS:-180}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       DEBUG: ${DEBUG:-true}
@@ -100,22 +132,63 @@ services:
       OBJECT_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
       OBJECT_STORAGE_BUCKET: face-attendance
       OBJECT_STORAGE_SECURE: "false"
+      # Total DB connections = (DB_POOL_SIZE + DB_MAX_OVERFLOW) x BACKEND_WORKERS.
+      BACKEND_WORKERS: ${BACKEND_WORKERS:-4}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-15}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-15}
+      # Concurrent AI calls per backend worker; BACKEND_WORKERS x this should be
+      # close to AI_WORKERS so frames wait briefly instead of timing out.
+      AI_MAX_INFLIGHT_PER_WORKER: ${AI_MAX_INFLIGHT_PER_WORKER:-1}
+      # Only Nginx reaches the backend inside the Docker network, so trust its
+      # X-Forwarded-For header; rate limits then apply per real client IP.
+      FORWARDED_ALLOW_IPS: "*"
     depends_on:
-      mysql:
-        condition: service_healthy
+      mysql-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       ai_service:
         condition: service_healthy
       object-storage:
         condition: service_started
-    ports:
-      - "8001:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 15s
       timeout: 5s
       retries: 5
+
+  # Daily data retention: expired evidence photos, revoked embeddings, old tokens.
+  maintenance:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+      DB_POOL_SIZE: 2
+      DB_MAX_OVERFLOW: 0
+    command: ["python", "-m", "app.jobs.maintenance"]
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # Daily MySQL dump + evidence snapshot into ./backups (keep BACKUP_RETENTION_DAYS).
+  db-backup:
+    image: mysql:8.0.46
+    restart: unless-stopped
+    environment:
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      MYSQL_DB: ${MYSQL_DB:-face_attendance_db}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - ./backend/scripts/backup-mysql.sh:/scripts/backup-mysql.sh:ro
+      - ./scripts/backup/backup-loop.sh:/scripts/backup-loop.sh:ro
+      - minio_data:/object-storage:ro
+      - ./backups:/backups
+    entrypoint: ["sh", "/scripts/backup-loop.sh"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+
   frontend:
     build: ./frontend
     restart: unless-stopped
@@ -125,7 +198,19 @@ services:
     ports:
       - "80:80"
 
+  # Optional: docker compose --profile monitoring up -d
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+
 volumes:
   mysql_data:
   minio_data:
   insightface_models:
+  prometheus_data:

@@ -1,0 +1,24 @@
+# Local development only (loaded automatically by `docker compose up`).
+# Ports bind to 127.0.0.1 so other machines on the LAN cannot reach the
+# database, Redis or the internal APIs directly.
+# Host MySQL port is 3307 because a local Windows MySQL often holds 3306.
+services:
+  mysql:
+    ports:
+      - "127.0.0.1:3307:3306"
+
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  object-storage:
+    ports:
+      - "127.0.0.1:8333:8333"
+
+  ai_service:
+    ports:
+      - "127.0.0.1:8002:8002"
+
+  backend:
+    ports:
+      - "127.0.0.1:8001:8000"

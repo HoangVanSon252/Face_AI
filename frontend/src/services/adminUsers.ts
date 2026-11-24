@@ -36,10 +36,67 @@ const toFrontendUser = (user: BackendUser): User => {
 
 const toBackendRole = (role: Role): BackendRole => role === 'teacher' ? 'LECTURER' : role === 'admin' ? 'ADMIN' : 'STUDENT'
 
+const PAGE_LIMIT = 500
+// Many views call getUsers() at once as a lookup table; share one fetch for a
+// few seconds and drop it after any mutation.
+const CACHE_TTL_MS = 5000
+let allUsersCache: { at: number; promise: Promise<User[]> } | null = null
+if (typeof window !== 'undefined') {
+  window.addEventListener('data:changed', () => { allUsersCache = null })
+}
+
+export interface UserPageQuery {
+  page: number
+  pageSize: number
+  query?: string
+  role?: Role
+}
+
+export interface UserPage {
+  items: User[]
+  total: number
+}
+
+async function fetchUsers(params: URLSearchParams): Promise<{ users: BackendUser[]; total: number | null }> {
+  let total: number | null = null
+  const users = await httpClient.get<BackendUser[]>(`/api/v1/users/?${params}`, {
+    onHeaders: (headers) => {
+      const value = headers.get('X-Total-Count')
+      total = value === null ? null : Number(value)
+    },
+  })
+  return { users, total }
+}
+
+async function fetchAllUsers(): Promise<User[]> {
+  const all: BackendUser[] = []
+  for (let skip = 0; ; skip += PAGE_LIMIT) {
+    const { users, total } = await fetchUsers(new URLSearchParams({ skip: String(skip), limit: String(PAGE_LIMIT) }))
+    all.push(...users)
+    if (users.length < PAGE_LIMIT || (total !== null && all.length >= total)) break
+  }
+  return all.map(toFrontendUser)
+}
+
 export const adminUserService = {
+  /** Every user the caller may see (all pages), for lookups such as id -> name. */
   async getUsers(): Promise<User[]> {
-    const users = await httpClient.get<BackendUser[]>('/api/v1/users/?limit=100')
-    return users.map(toFrontendUser)
+    if (!allUsersCache || Date.now() - allUsersCache.at > CACHE_TTL_MS) {
+      const promise = fetchAllUsers()
+      allUsersCache = { at: Date.now(), promise }
+      promise.catch(() => { if (allUsersCache?.promise === promise) allUsersCache = null })
+    }
+    // Copy: callers may sort/filter in place without corrupting the shared cache.
+    return allUsersCache.promise.then((users) => [...users])
+  },
+
+  /** One server-side page for list screens. */
+  async getUsersPage({ page, pageSize, query, role }: UserPageQuery): Promise<UserPage> {
+    const params = new URLSearchParams({ skip: String((page - 1) * pageSize), limit: String(pageSize) })
+    if (query?.trim()) params.set('query', query.trim())
+    if (role) params.set('role', toBackendRole(role))
+    const { users, total } = await fetchUsers(params)
+    return { items: users.map(toFrontendUser), total: total ?? users.length }
   },
 
   async updateUser(user: User, changes: Partial<User>): Promise<User> {

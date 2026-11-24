@@ -8,11 +8,11 @@ import {
   Search,
   Check,
   X,
-  MoreHorizontal,
+  CalendarDays,
   type LucideIcon,
 } from 'lucide-react'
-import type { AttendanceLog, AttendanceSession, ClassItem, ComplaintRequest, AuditLog, User } from '../../types'
-import { classService, sessionService, complaintService, auditService } from '../../services/api'
+import type { AttendanceLog, AttendanceSession, ClassItem, ComplaintRequest, User } from '../../types'
+import { classService, sessionService, complaintService } from '../../services/api'
 import { useToast } from '../../components/common/Toast'
 import { cn } from '../../lib/utils'
 
@@ -53,20 +53,17 @@ export function TeacherDashboard({
   const [classes, setClasses] = useState<ClassItem[]>([])
   const [sessions, setSessions] = useState<AttendanceSession[]>([])
   const [complaints, setComplaints] = useState<ComplaintRequest[]>([])
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([])
   useEffect(() => {
     const loadRealData = async () => {
       try {
-        const [clsRes, sesRes, cmpRes, logRes] = await Promise.all([
+        const [clsRes, sesRes, cmpRes] = await Promise.all([
           classService.getClasses().catch(() => []),
           sessionService.getSessions().catch(() => []),
           complaintService.getComplaints().catch(() => []),
-          auditService.getLogs().catch(() => []),
         ])
         setClasses(clsRes)
         setSessions(sesRes)
         setComplaints(cmpRes)
-        setAuditLogs(logRes)
       } catch (err) {
         console.error('Lỗi khi tải dữ liệu giảng viên:', err)
       }
@@ -86,17 +83,16 @@ export function TeacherDashboard({
   const activeSession = sessions.find((s) => s.status === 'active')
   const pendingComplaints = complaints.filter((c) => c.status === 'pending').length
 
-  const activities = auditLogs.slice(0, 5).map((l, idx) => ({
-    time: l.time || 'Vừa xong',
-    title: l.action,
-    desc: `${l.actor}: ${l.detail}`,
-    tone: idx % 3 === 0 ? 'teal' : idx % 3 === 1 ? 'blue' : 'amber',
-  }))
+  const startOfToday = new Date(new Date().setHours(0, 0, 0, 0)).toISOString()
+  const upcoming = sessions
+    .filter((s) => s.status === 'scheduled' && (s.scheduledStartAt || '') >= startOfToday)
+    .sort((a, b) => (a.scheduledStartAt || '').localeCompare(b.scheduledStartAt || ''))
+    .slice(0, 5)
 
   return (
     <>
       {/* Stats row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+      <div className="stagger grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
         <StatCard
           icon={Users}
           label="TỔNG SINH VIÊN"
@@ -323,29 +319,35 @@ export function TeacherDashboard({
           </div>
         </div>
 
-        {/* Activity feed */}
+        {/* Upcoming sessions */}
         <div className="bg-white border border-[#e4ebeb] rounded-[14px] p-5">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-[13px] font-bold text-[#172b35]">Nhật ký hệ thống</h2>
-              <p className="text-[11px] text-[#8b999d] mt-0.5">Sự kiện kiểm toán thực</p>
+              <h2 className="text-[13px] font-bold text-[#172b35]">Buổi dạy sắp tới</h2>
+              <p className="text-[11px] text-[#8b999d] mt-0.5">Theo lịch các ca học của bạn</p>
             </div>
-            <MoreHorizontal size={16} className="text-[#8b999d]" />
+            <CalendarDays size={16} className="text-[#8b999d]" />
           </div>
-          <div className="flex flex-col gap-0.5">
-            {activities.length === 0 ? (
-              <p className="text-xs text-slate-400 py-4 text-center">Chưa có nhật ký ghi nhận.</p>
+          <div className="stagger flex flex-col gap-0.5">
+            {upcoming.length === 0 ? (
+              <p className="text-xs text-slate-400 py-4 text-center">Chưa có buổi nào sắp tới. Lập lịch trong "Ca học của tôi".</p>
             ) : (
-              activities.map((item, idx) => (
-                <div key={idx} className="flex items-start gap-3 py-2.5 border-b border-[#f0f4f4] last:border-0">
-                  <div className={cn('w-2 h-2 rounded-full mt-1 flex-none', TONE_DOT[item.tone])} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[12px] font-semibold text-[#172b35] leading-tight">{item.title}</p>
-                    <p className="text-[10.5px] text-[#6e7d82] mt-0.5 truncate">{item.desc}</p>
+              upcoming.map((item, idx) => {
+                const start = new Date(item.scheduledStartAt || '')
+                const isToday = start.toDateString() === new Date().toDateString()
+                return (
+                  <div key={item.id} className="flex items-start gap-3 py-2.5 border-b border-[#f0f4f4] last:border-0">
+                    <div className={cn('w-2 h-2 rounded-full mt-1 flex-none', isToday ? 'live-dot bg-emerald-500' : TONE_DOT[idx % 2 ? 'blue' : 'teal'])} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[12px] font-semibold text-[#172b35] leading-tight truncate">{item.className}</p>
+                      <p className="text-[10.5px] text-[#6e7d82] mt-0.5 truncate">{item.classId} · {item.title} · {item.room}</p>
+                    </div>
+                    <time className={cn('text-[10px] flex-none text-right', isToday ? 'font-bold text-emerald-700' : 'text-[#a8b5b8]')}>
+                      {isToday ? 'Hôm nay' : start.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })}<br />{item.startTime}
+                    </time>
                   </div>
-                  <time className="text-[10px] text-[#a8b5b8] flex-none">{item.time}</time>
-                </div>
-              ))
+                )
+              })
             )}
           </div>
         </div>
@@ -358,7 +360,7 @@ function StatCard({ icon: Icon, label, value, detail, tone }: {
   icon: LucideIcon; label: string; value: string; detail: string; tone: string
 }) {
   return (
-    <div className="bg-white border border-[#e4ebeb] rounded-[14px] p-4 flex items-start gap-3">
+    <div className="lift bg-white border border-[#e4ebeb] rounded-[14px] p-4 flex items-start gap-3">
       <div className={cn('w-9 h-9 rounded-xl grid place-items-center flex-none', TONE_ICON[tone])}>
         <Icon size={18} />
       </div>

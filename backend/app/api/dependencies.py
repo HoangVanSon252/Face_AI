@@ -9,6 +9,7 @@ from app.models.attendance import AttendanceRecord, AttendanceSession
 from app.models.course import ClassSection, Enrollment, EnrollmentStatusEnum
 from app.models.user import RoleEnum, User, UserStatusEnum
 from app.crud import crud_user
+from app.services import token_store
 
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl=f"{settings.API_V1_STR}/auth/login")
@@ -40,6 +41,10 @@ def get_current_user(
         if user_id is None or payload.get("type") != "access" or not payload.get("jti"):
             raise credentials_exception
     except JWTError:
+        raise credentials_exception
+
+    # Logout / account lock revoke tokens before their 15-minute expiry.
+    if token_store.is_access_token_revoked(payload["jti"], int(user_id), int(payload.get("iat", 0))):
         raise credentials_exception
 
     user = crud_user.get_user(db, user_id=int(user_id))

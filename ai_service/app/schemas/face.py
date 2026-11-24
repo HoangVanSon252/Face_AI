@@ -1,8 +1,12 @@
 from pydantic import BaseModel, Field
 
 
+# ~3MB Base64 ≈ 2,2MB ảnh: đủ cho frame webcam, chặn payload làm cạn RAM.
+MAX_IMAGE_BASE64_LENGTH = 3_000_000
+
+
 class ImageRequest(BaseModel):
-    image_base64: str = Field(min_length=100)
+    image_base64: str = Field(min_length=100, max_length=MAX_IMAGE_BASE64_LENGTH)
 
 
 class FaceDetection(BaseModel):
@@ -31,3 +35,14 @@ class LivenessResponse(BaseModel):
     is_live: bool | None = None
     score: float | None = Field(default=None, ge=0, le=1)
     reason: str | None = None
+
+
+class AnalyzeResponse(BaseModel):
+    """Embedding + liveness of the single face in a frame, from one detection pass."""
+
+    embedding: list[float]
+    dimension: int = Field(ge=1)
+    quality_score: float = Field(ge=0, le=1)
+    detection_confidence: float = Field(ge=0, le=1)
+    bbox: list[float] = Field(min_length=4, max_length=4)
+    liveness: LivenessResponse

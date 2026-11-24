@@ -1,4 +1,5 @@
 import { getStoredToken, removeStoredToken } from '../services/httpClient'
+import { buildTicketedWsUrl, reconnectDelayMs } from './wsTicket'
 
 export interface UserWsMessage {
   event: string
@@ -11,23 +12,42 @@ export class UserWebSocketClient {
   private shouldReconnect: boolean = true
   private reconnectTimer: any = null
   private pingInterval: any = null
+  private attempt = 0
 
-  public connect(wsUrl?: string): void {
+  public connect(wsBaseUrl?: string): void {
     this.shouldReconnect = true
+    this.attempt = 0
+    void this.open(wsBaseUrl)
+  }
+
+  private scheduleReconnect(wsBaseUrl?: string): void {
+    if (!this.shouldReconnect) return
+    clearTimeout(this.reconnectTimer)
+    const delay = reconnectDelayMs(this.attempt)
+    this.attempt = Math.min(this.attempt + 1, 10)
+    this.reconnectTimer = setTimeout(() => void this.open(wsBaseUrl), delay)
+  }
+
+  private async open(wsBaseUrl?: string): Promise<void> {
     const token = getStoredToken()
     if (!token || typeof window === 'undefined' || !('WebSocket' in window)) {
       return
     }
 
     try {
-      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-      const targetUrl =
-        wsUrl ||
-        `${protocol}://${window.location.host}/api/v1/ws/users/me?token=${encodeURIComponent(token)}`
+      let targetUrl: string
+      try {
+        // Single-use ticket: the JWT never appears in the WebSocket URL.
+        targetUrl = await buildTicketedWsUrl('/api/v1/ws/users/me', wsBaseUrl)
+      } catch {
+        return this.scheduleReconnect(wsBaseUrl)
+      }
+      if (!this.shouldReconnect) return
 
       this.ws = new WebSocket(targetUrl)
 
       this.ws.onopen = () => {
+        this.attempt = 0
         // Start ping heartbeat every 25 seconds
         if (this.pingInterval) clearInterval(this.pingInterval)
         this.pingInterval = setInterval(() => {
@@ -55,6 +75,8 @@ export class UserWebSocketClient {
                 detail: { role: data.payload.role },
               })
             )
+          } else if (data.event === 'NOTIFICATION') {
+            window.dispatchEvent(new CustomEvent('notification:new', { detail: data.payload }))
           } else if (data.event === 'CLASS_ROSTER_CHANGED') {
             window.dispatchEvent(
               new CustomEvent('class-roster:changed', { detail: data.payload })
@@ -70,12 +92,7 @@ export class UserWebSocketClient {
 
       this.ws.onclose = () => {
         if (this.pingInterval) clearInterval(this.pingInterval)
-        if (this.shouldReconnect) {
-          clearTimeout(this.reconnectTimer)
-          this.reconnectTimer = setTimeout(() => {
-            this.connect(wsUrl)
-          }, 5000)
-        }
+        this.scheduleReconnect(wsBaseUrl)
       }
 
       this.ws.onerror = () => {

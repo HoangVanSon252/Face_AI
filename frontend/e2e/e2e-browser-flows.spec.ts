@@ -43,15 +43,13 @@ test.describe('EduFace AI - Browser End-to-End Test Suite', () => {
     await expect(page.locator('text=Nguyễn Văn Giảng').or(page.locator('text=Giảng viên')).or(page.locator('text=Nguyễn Văn Thầy')).first()).toBeVisible({ timeout: 10000 });
 
     // 4. Navigate to Classes
-    await page.locator('button:has-text("Lớp học")').first().click();
-    await expect(
-      page.locator('text=Danh sách lớp học')
-        .or(page.locator('text=QUẢN LÝ MÔN HỌC'))
-        .first()
-    ).toBeVisible({ timeout: 5000 });
+    await page.locator('nav[aria-label="Điều hướng chính"] button:has-text("Lớp hành chính")').click();
+    await expect(page.getByRole('heading', { name: 'Lớp hành chính' })).toBeVisible({ timeout: 5000 });
+    // Lecturers see administrative classes read-only.
+    await expect(page.getByRole('button', { name: 'Thêm lớp mới' })).toHaveCount(0);
 
     // 5. Navigate to Attendance
-    await page.locator('button:has-text("Điểm danh")').first().click();
+    await page.locator('nav[aria-label="Điều hướng chính"] button:has-text("Phiên & lịch sử")').click();
     await expect(
       page.locator('text=Phiên điểm danh')
         .or(page.locator('text=Điểm danh'))
@@ -145,18 +143,18 @@ test.describe('EduFace AI - Browser End-to-End Test Suite', () => {
     await expect(page.locator('text=Nguyễn Văn Giảng').or(page.locator('text=Giảng viên')).or(page.locator('text=Nguyễn Văn Thầy')).first()).toBeVisible({ timeout: 10000 });
 
     // 2. Navigate to Class Management via Sidebar Nav
-    await page.locator('nav[aria-label="Điều hướng chính"] button:has-text("Môn học")').click();
+    await page.locator('nav[aria-label="Điều hướng chính"] button:has-text("Ca học của tôi")').click();
     await expect(page.locator('text=QUẢN LÝ MÔN HỌC').first()).toBeVisible({ timeout: 10000 });
+    // Lecturers do not create subjects or ca học; the admin assigns them.
+    await expect(page.getByRole('button', { name: 'Tạo môn học' })).toHaveCount(0);
 
-    // 3. The empty subject list is valid with real data. Enter a subject only when it exists.
-    const subjectCard = page.locator('button:has-text("Xem ca học")').first();
-    if (await subjectCard.isVisible()) {
-      await subjectCard.click();
-      const scheduleButton = page.locator('button:has-text("Lịch ca học")').first();
-      if (await scheduleButton.isVisible()) {
-        await scheduleButton.click();
-        await expect(page.locator('text=Lịch học theo kỳ').first()).toBeVisible({ timeout: 5000 });
-      }
+    // 3. An empty list is valid with real data. Enter a ca học only when one exists.
+    const sectionCard = page.locator('button:has-text("Xem chi tiết ca học")').first();
+    if (await sectionCard.isVisible()) {
+      await sectionCard.click();
+      await expect(page.locator('text=Lớp trong ca học').first()).toBeVisible({ timeout: 5000 });
+      await page.locator('button:has-text("Lập lịch cả kỳ")').first().click();
+      await expect(page.locator('text=Học vào các thứ').first()).toBeVisible({ timeout: 5000 });
     }
     // 6. Close Modal
     const closeBtn = page.locator('button:has-text("Đóng form")').or(page.locator('button:has-text("Hủy")')).first();

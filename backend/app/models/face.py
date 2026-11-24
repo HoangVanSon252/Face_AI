@@ -37,7 +37,7 @@ class FaceEmbedding(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     face_profile_id = Column(BigInteger, ForeignKey("face_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
-    embedding_data = Column(JSON, nullable=False) # Lưu vector dưới dạng array trong JSON
+    embedding_data = Column(JSON, nullable=False)  # "v1:..." AES-GCM (app/core/biometric_crypto.py); list = legacy plaintext
     quality_score = Column(Numeric(5, 4), nullable=False) # Lấy 4 chữ số thập phân
     image_uri = Column(String(500), nullable=True)
     image_checksum = Column(String(64), nullable=True)
@@ -50,3 +50,19 @@ class FaceEmbedding(Base):
     )
 
     profile = relationship("FaceProfile", back_populates="embeddings")
+
+
+class BiometricConsent(Base):
+    """Proof of the student's consent to biometric processing (Decree 13/2023/ND-CP):
+    which policy text, when, and from where. revoked_at is set when the student
+    withdraws consent and their face data is erased."""
+    __tablename__ = "biometric_consents"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    student_id = Column(BigInteger, ForeignKey("students.user_id", ondelete="CASCADE"), nullable=False, index=True)
+    policy_version = Column(String(30), nullable=False)
+    granted_at = Column(DateTime, nullable=False, default=func.now())
+    granted_by = Column(BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    ip_address = Column(String(45), nullable=True)
+    user_agent = Column(String(255), nullable=True)
+    revoked_at = Column(DateTime, nullable=True)

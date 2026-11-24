@@ -111,5 +111,5 @@ def setup_middlewares(app: FastAPI) -> None:
             "X-CSRF-Token",
             "X-Request-ID",
         ],
-        expose_headers=["X-Request-ID"],
+        expose_headers=["X-Request-ID", "X-Total-Count"],
     )

@@ -181,3 +181,11 @@ def create_download_url(object_uri: str, expires_in_seconds: int = 300) -> str:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Unable to generate evidence download URL",
         ) from exc
+
+
+def delete_object(object_uri: str) -> None:
+    """Delete one stored object (evidence retention, erasure requests)."""
+    prefix = f"s3://{settings.OBJECT_STORAGE_BUCKET}/"
+    if not object_uri.startswith(prefix):
+        raise ValueError("Object URI does not belong to the configured bucket")
+    _client().delete_object(Bucket=settings.OBJECT_STORAGE_BUCKET, Key=object_uri[len(prefix):])

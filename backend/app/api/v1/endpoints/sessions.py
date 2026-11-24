@@ -15,10 +15,31 @@ from app.schemas.attendance import (
     AttendanceSessionResponse,
     AttendanceSessionUpdate,
 )
+from app.core.config import settings
+from app.services import notifications
 from app.services.audit_service import write_audit_log
 from app.services.realtime import realtime_service
 
 router = APIRouter()
+STAFF = [RoleEnum.LECTURER.value, RoleEnum.ADMIN.value]
+
+
+def _local_to_utc(day: date, hour: int, minute: int) -> datetime:
+    """Campus wall-clock time -> naive UTC as stored in the database."""
+    return datetime.combine(day, datetime.min.time()).replace(hour=hour, minute=minute) - timedelta(
+        minutes=settings.APP_UTC_OFFSET_MINUTES
+    )
+
+
+def _session_name(session: AttendanceSession) -> str:
+    return session.title or f"Buổi {session.session_no}"
+
+
+def _notify_schedule_change(db: Session, session: AttendanceSession, actor_id: int, kind: str, title: str) -> None:
+    section = session.section
+    recipients = notifications.section_student_ids(db, session.section_id) + [section.lecturer_id]
+    body = f"{notifications.section_label(section)} · {notifications.local_time(session.scheduled_start_at)}"
+    notifications.notify(db, notifications.others(recipients, actor_id), kind, title, body, link="/schedule")
 
 
 class SemesterScheduleBatchCreate(BaseModel):
@@ -39,15 +60,8 @@ def generate_semester_sessions(
     db: Session = Depends(dependencies.get_db),
     current_user=Depends(dependencies.require_role([RoleEnum.LECTURER.value, RoleEnum.ADMIN.value])),
 ):
-    dependencies.require_section_access(db, section_id, current_user)
-
-    # Replace only editable future timetable entries; attendance history stays intact.
-    replaced_count = db.query(AttendanceSession).filter(
-        AttendanceSession.section_id == section_id,
-        AttendanceSession.status == SessionStatusEnum.SCHEDULED,
-        AttendanceSession.scheduled_start_at >= datetime.utcnow(),
-    ).delete(synchronize_session=False)
-    db.flush()
+    section = dependencies.require_section_access(db, section_id, current_user)
+    now = datetime.utcnow()
 
     try:
         start_d = date.fromisoformat(data.start_date)
@@ -63,6 +77,18 @@ def generate_semester_sessions(
         end_h, end_m = map(int, data.end_time.split(":"))
     except ValueError:
         raise HTTPException(status_code=422, detail="Định dạng giờ không hợp lệ (cần HH:MM)")
+    if (end_h, end_m) <= (start_h, start_m):
+        raise HTTPException(status_code=422, detail="Giờ kết thúc phải sau giờ bắt đầu")
+    if not data.days_of_week or any(day not in range(7) for day in data.days_of_week):
+        raise HTTPException(status_code=422, detail="Chọn ít nhất một thứ trong tuần")
+
+    # Replace only editable future timetable entries; attendance history stays intact.
+    replaced_count = db.query(AttendanceSession).filter(
+        AttendanceSession.section_id == section_id,
+        AttendanceSession.status == SessionStatusEnum.SCHEDULED,
+        AttendanceSession.scheduled_start_at >= now,
+    ).delete(synchronize_session=False)
+    db.flush()
 
     curr_max = (
         db.query(func.max(AttendanceSession.session_no))
@@ -75,15 +101,16 @@ def generate_semester_sessions(
     created = []
 
     while curr_date <= end_d:
-        if curr_date.weekday() in data.days_of_week:
+        st = _local_to_utc(curr_date, start_h, start_m)
+        # Days already gone this semester are skipped: the schedule covers what is left.
+        if curr_date.weekday() in data.days_of_week and st >= now:
             curr_max += 1
-            st = datetime.combine(curr_date, datetime.min.time()).replace(hour=start_h, minute=start_m)
-            et = datetime.combine(curr_date, datetime.min.time()).replace(hour=end_h, minute=end_m)
-            late = st + timedelta(minutes=data.late_minutes)
+            et = _local_to_utc(curr_date, end_h, end_m)
+            late = min(st + timedelta(minutes=data.late_minutes), et)
 
             sess = AttendanceSession(
                 section_id=section_id,
-                created_by=current_user.id,
+                created_by=section.lecturer_id,
                 session_no=curr_max,
                 title=f"{data.title_prefix} {curr_max}",
                 status=SessionStatusEnum.SCHEDULED,
@@ -100,8 +127,15 @@ def generate_semester_sessions(
         curr_date += timedelta(days=1)
 
     if not created:
-        raise HTTPException(status_code=422, detail="Không tìm thấy ngày nào phù hợp với thứ đã chọn trong khoảng thời gian học kỳ này")
+        raise HTTPException(status_code=422, detail="Không còn ngày nào phù hợp với thứ đã chọn trong phần còn lại của học kỳ")
 
+    recipients = notifications.section_student_ids(db, section_id) + [section.lecturer_id]
+    notifications.notify(
+        db, notifications.others(recipients, current_user.id), "SCHEDULE_UPDATED",
+        f"Lịch học {notifications.section_label(section)} đã được cập nhật",
+        f"{len(created)} buổi, buổi đầu lúc {notifications.local_time(created[0].scheduled_start_at)}.",
+        link="/schedule",
+    )
     db.commit()
     for s in created:
         db.refresh(s)
@@ -122,9 +156,11 @@ def create_session(
     db: Session = Depends(dependencies.get_db),
     current_user=Depends(dependencies.require_role([RoleEnum.LECTURER.value, RoleEnum.ADMIN.value])),
 ):
-    dependencies.require_section_access(db, section_id, current_user)
+    section = dependencies.require_section_access(db, section_id, current_user)
     try:
-        session = crud_attendance.create_session(db, section_id, current_user.id, data)
+        # Sessions belong to the section's lecturer even when an admin schedules them.
+        session = crud_attendance.create_session(db, section_id, section.lecturer_id, data)
+        _notify_schedule_change(db, session, current_user.id, "SESSION_ADDED", f"Thêm buổi học: {_session_name(session)}")
         write_audit_log(
             db, action="SESSION_CREATED", actor_user_id=current_user.id,
             entity_type="ATTENDANCE_SESSION", entity_id=session.id,
@@ -143,7 +179,7 @@ def update_session(
     session_id: int,
     data: AttendanceSessionUpdate,
     db: Session = Depends(dependencies.get_db),
-    current_user=Depends(dependencies.require_role([RoleEnum.LECTURER.value])),
+    current_user=Depends(dependencies.require_role(STAFF)),
 ):
     session = dependencies.require_session_access(db, session_id, current_user)
     if session.status != SessionStatusEnum.SCHEDULED:
@@ -158,7 +194,13 @@ def update_session(
     if late < start or late > end:
         raise HTTPException(status_code=422, detail="late_after_at must be between scheduled_start_at and scheduled_end_at")
 
+    old_start = session.scheduled_start_at
     updated = crud_attendance.update_session(db, session, data)
+    if updated.scheduled_start_at != old_start:
+        _notify_schedule_change(
+            db, updated, current_user.id, "SESSION_RESCHEDULED",
+            f"Đổi lịch {_session_name(updated)} (trước: {notifications.local_time(old_start)})",
+        )
     write_audit_log(
         db, action="SESSION_UPDATED", actor_user_id=current_user.id,
         entity_type="ATTENDANCE_SESSION", entity_id=session.id,
@@ -173,7 +215,7 @@ def update_session(
 def delete_session(
     session_id: int,
     db: Session = Depends(dependencies.get_db),
-    current_user=Depends(dependencies.require_role([RoleEnum.LECTURER.value])),
+    current_user=Depends(dependencies.require_role(STAFF)),
 ):
     session = dependencies.require_session_access(db, session_id, current_user)
     if session.status not in {SessionStatusEnum.SCHEDULED, SessionStatusEnum.CANCELLED}:
@@ -185,6 +227,8 @@ def delete_session(
     if has_records:
         raise HTTPException(status_code=409, detail="Cannot delete session that already has attendance records")
 
+    if session.status == SessionStatusEnum.SCHEDULED and session.scheduled_start_at >= datetime.utcnow():
+        _notify_schedule_change(db, session, current_user.id, "SESSION_REMOVED", f"Hủy buổi học: {_session_name(session)}")
     crud_attendance.delete_session(db, session)
     write_audit_log(
         db, action="SESSION_DELETED", actor_user_id=current_user.id,
@@ -223,16 +267,22 @@ def open_session(
 ):
     session = dependencies.require_session_access(db, session_id, current_user)
     if session.status != SessionStatusEnum.SCHEDULED:
-        raise HTTPException(status_code=409, detail="Only scheduled sessions can be opened")
+        raise HTTPException(status_code=409, detail="Chỉ mở được buổi học đang ở trạng thái chưa diễn ra")
     if crud_attendance.has_open_session(db, session.section_id, exclude_id=session.id):
-        raise HTTPException(status_code=409, detail="Another attendance session is already open")
+        raise HTTPException(status_code=409, detail="Ca học này đang có một phiên điểm danh khác")
     if crud_attendance.has_open_session_for_lecturer(db, current_user.id, exclude_id=session.id):
         raise HTTPException(
             status_code=409,
-            detail="You already have an open attendance session. Close it before opening another class.",
+            detail="Bạn đang mở một phiên điểm danh khác. Hãy đóng phiên đó trước.",
         )
     session.status = SessionStatusEnum.OPEN
     session.opened_at = datetime.utcnow()
+    notifications.notify(
+        db, notifications.section_student_ids(db, session.section_id), "SESSION_OPENED",
+        f"Đang mở điểm danh: {_session_name(session)}",
+        f"{notifications.section_label(session.section)}. Hãy đứng trước camera của lớp để điểm danh.",
+        link="/schedule",
+    )
     write_audit_log(
         db, action="SESSION_OPENED", actor_user_id=current_user.id,
         entity_type="ATTENDANCE_SESSION", entity_id=session.id,
@@ -252,7 +302,7 @@ def close_session(
 ):
     session = dependencies.require_session_access(db, session_id, current_user)
     if session.status != SessionStatusEnum.OPEN:
-        raise HTTPException(status_code=409, detail="Only open sessions can be closed")
+        raise HTTPException(status_code=409, detail="Phiên này không còn mở")
     session.status = SessionStatusEnum.CLOSED
     session.closed_at = datetime.utcnow()
     write_audit_log(
@@ -269,12 +319,13 @@ def close_session(
 def cancel_session(
     session_id: int,
     db: Session = Depends(dependencies.get_db),
-    current_user=Depends(dependencies.require_role([RoleEnum.LECTURER.value])),
+    current_user=Depends(dependencies.require_role(STAFF)),
 ):
     session = dependencies.require_session_access(db, session_id, current_user)
     if session.status != SessionStatusEnum.SCHEDULED:
-        raise HTTPException(status_code=409, detail="Only scheduled sessions can be cancelled")
+        raise HTTPException(status_code=409, detail="Chỉ hủy được buổi học chưa diễn ra")
     session.status = SessionStatusEnum.CANCELLED
+    _notify_schedule_change(db, session, current_user.id, "SESSION_CANCELLED", f"Hủy buổi học: {_session_name(session)}")
     write_audit_log(
         db, action="SESSION_CANCELLED", actor_user_id=current_user.id,
         entity_type="ATTENDANCE_SESSION", entity_id=session.id,

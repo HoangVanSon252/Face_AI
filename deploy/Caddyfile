@@ -1,0 +1,15 @@
+# HTTPS reverse proxy for a self-hosted deployment (docker-compose.prod.yml).
+# Caddy obtains and renews a Let's Encrypt certificate for $DOMAIN automatically;
+# ports 80 and 443 must be reachable from the internet and DNS must point here.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	reverse_proxy frontend:80 {
+		# Pass the real client IP on; Nginx appends it to X-Forwarded-For.
+		header_up X-Real-IP {remote_host}
+	}
+}

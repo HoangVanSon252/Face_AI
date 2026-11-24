@@ -1,8 +1,11 @@
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.endpoints.face import router as face_router
 from app.core.config import settings
+from app.core.metrics import MetricsMiddleware, metrics_endpoint
+from app.engine.liveness import models_configured
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -21,6 +24,10 @@ app.add_middleware(
 
 app.include_router(face_router, prefix=settings.API_V1_STR)
 
+# Prometheus metrics at /metrics (inference latency per endpoint); internal only.
+app.add_middleware(MetricsMiddleware)
+app.add_route("/metrics", metrics_endpoint, include_in_schema=False)
+
 
 @app.on_event("startup")
 def preload_models():
@@ -31,11 +38,15 @@ def preload_models():
 
 @app.get("/health", tags=["health"])
 def health():
-    return {
+    liveness_configured = models_configured()
+    body = {
         "status": "ok",
         "service": "ai-service",
-        "liveness_configured": bool(
-            settings.liveness_model_file
-            and settings.liveness_model_file.is_file()
-        ),
+        "liveness_configured": liveness_configured,
     }
+    # Fail closed: outside local development a missing anti-spoofing model
+    # must keep the service unhealthy instead of silently accepting photos.
+    if not liveness_configured and not settings.liveness_fallback_allowed:
+        body["status"] = "liveness_model_missing"
+        return JSONResponse(status_code=503, content=body)
+    return body

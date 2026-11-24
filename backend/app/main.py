@@ -6,12 +6,14 @@ from sqlalchemy import text
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from app.core.config import settings
+from app.core.metrics import MetricsMiddleware, metrics_endpoint
 from app.core.middleware import setup_middlewares
 from app.core.limiter import limiter
 from app.api.v1.api import api_router
 from app.core.exceptions import setup_exception_handler
 from app.core.logging import setup_logging
 from app.services.realtime import realtime_service
+from app.services.ai_client import close_client
 from app.services.object_storage import ensure_bucket
 
 setup_logging()
@@ -26,6 +28,7 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         await realtime_service.stop()
+        close_client()
         engine.dispose()
 
 app = FastAPI(
@@ -46,6 +49,11 @@ setup_exception_handler(app)
 
 # Tích hợp toàn bộ router (gom từ thư mục endpoints)
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
+# Prometheus metrics at /metrics (latency histograms per route template).
+# Nginx only proxies /api and /health, so this stays internal to the Docker network.
+app.add_middleware(MetricsMiddleware)
+app.add_route("/metrics", metrics_endpoint, include_in_schema=False)
 
 @app.get("/")
 def root():
