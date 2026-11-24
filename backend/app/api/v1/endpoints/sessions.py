@@ -39,7 +39,7 @@ def _notify_schedule_change(db: Session, session: AttendanceSession, actor_id: i
     section = session.section
     recipients = notifications.section_student_ids(db, session.section_id) + [section.lecturer_id]
     body = f"{notifications.section_label(section)} · {notifications.local_time(session.scheduled_start_at)}"
-    notifications.notify(db, notifications.others(recipients, actor_id), kind, title, body, link="/attendance")
+    notifications.notify(db, notifications.others(recipients, actor_id), kind, title, body, link="/schedule")
 
 
 class SemesterScheduleBatchCreate(BaseModel):
@@ -134,7 +134,7 @@ def generate_semester_sessions(
         db, notifications.others(recipients, current_user.id), "SCHEDULE_UPDATED",
         f"Lịch học {notifications.section_label(section)} đã được cập nhật",
         f"{len(created)} buổi, buổi đầu lúc {notifications.local_time(created[0].scheduled_start_at)}.",
-        link="/attendance",
+        link="/schedule",
     )
     db.commit()
     for s in created:
@@ -267,13 +267,13 @@ def open_session(
 ):
     session = dependencies.require_session_access(db, session_id, current_user)
     if session.status != SessionStatusEnum.SCHEDULED:
-        raise HTTPException(status_code=409, detail="Only scheduled sessions can be opened")
+        raise HTTPException(status_code=409, detail="Chỉ mở được buổi học đang ở trạng thái chưa diễn ra")
     if crud_attendance.has_open_session(db, session.section_id, exclude_id=session.id):
-        raise HTTPException(status_code=409, detail="Another attendance session is already open")
+        raise HTTPException(status_code=409, detail="Ca học này đang có một phiên điểm danh khác")
     if crud_attendance.has_open_session_for_lecturer(db, current_user.id, exclude_id=session.id):
         raise HTTPException(
             status_code=409,
-            detail="You already have an open attendance session. Close it before opening another class.",
+            detail="Bạn đang mở một phiên điểm danh khác. Hãy đóng phiên đó trước.",
         )
     session.status = SessionStatusEnum.OPEN
     session.opened_at = datetime.utcnow()
@@ -281,7 +281,7 @@ def open_session(
         db, notifications.section_student_ids(db, session.section_id), "SESSION_OPENED",
         f"Đang mở điểm danh: {_session_name(session)}",
         f"{notifications.section_label(session.section)}. Hãy đứng trước camera của lớp để điểm danh.",
-        link="/attendance",
+        link="/schedule",
     )
     write_audit_log(
         db, action="SESSION_OPENED", actor_user_id=current_user.id,
@@ -302,7 +302,7 @@ def close_session(
 ):
     session = dependencies.require_session_access(db, session_id, current_user)
     if session.status != SessionStatusEnum.OPEN:
-        raise HTTPException(status_code=409, detail="Only open sessions can be closed")
+        raise HTTPException(status_code=409, detail="Phiên này không còn mở")
     session.status = SessionStatusEnum.CLOSED
     session.closed_at = datetime.utcnow()
     write_audit_log(
@@ -323,7 +323,7 @@ def cancel_session(
 ):
     session = dependencies.require_session_access(db, session_id, current_user)
     if session.status != SessionStatusEnum.SCHEDULED:
-        raise HTTPException(status_code=409, detail="Only scheduled sessions can be cancelled")
+        raise HTTPException(status_code=409, detail="Chỉ hủy được buổi học chưa diễn ra")
     session.status = SessionStatusEnum.CANCELLED
     _notify_schedule_change(db, session, current_user.id, "SESSION_CANCELLED", f"Hủy buổi học: {_session_name(session)}")
     write_audit_log(

@@ -13,7 +13,8 @@ export type View =
   | 'Người dùng'
   | 'Nhật ký kiểm toán'
   | 'Danh sách sinh viên lớp'
-
+  | 'Học kỳ'
+  | 'Lịch học'
   | 'Project management'
 
 export interface User {

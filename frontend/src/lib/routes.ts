@@ -18,6 +18,8 @@ const VIEW_PATHS: Record<View, string> = {
   'Người dùng': '/admin/users',
   'Nhật ký kiểm toán': '/audit-logs',
   'Danh sách sinh viên lớp': '/classes/roster',
+  'Học kỳ': '/admin/semesters',
+  'Lịch học': '/schedule',
   'Project management': '/projects',
 }
 
@@ -50,13 +52,13 @@ export function pathFor(view: View, params: { sessionId?: number; rosterClassId?
 
 /** Pages each role may open; anything else redirects to the dashboard. */
 const ROLE_VIEWS: Record<Role, View[]> = {
-  student: ['Tổng quan', 'Đăng ký khuôn mặt', 'Lịch sử điểm danh', 'Khiếu nại'],
+  student: ['Tổng quan', 'Lịch học', 'Đăng ký khuôn mặt', 'Lịch sử điểm danh', 'Khiếu nại'],
   teacher: [
-    'Tổng quan', 'Môn học', 'Lớp học', 'Điểm danh', 'Lịch sử điểm danh', 'Chi tiết phiên điểm danh',
+    'Tổng quan', 'Lịch học', 'Môn học', 'Lớp học', 'Điểm danh', 'Lịch sử điểm danh', 'Chi tiết phiên điểm danh',
     'Danh sách sinh viên lớp', 'Khiếu nại', 'Báo cáo', 'Đăng ký khuôn mặt',
   ],
   admin: [
-    'Tổng quan', 'Người dùng', 'Môn học', 'Lớp học', 'Điểm danh', 'Lịch sử điểm danh',
+    'Tổng quan', 'Học kỳ', 'Người dùng', 'Môn học', 'Lớp học', 'Lịch học', 'Điểm danh', 'Lịch sử điểm danh',
     'Chi tiết phiên điểm danh', 'Danh sách sinh viên lớp', 'Khiếu nại', 'Báo cáo', 'Nhật ký kiểm toán',
     'Đăng ký khuôn mặt', 'Project management',
   ],
@@ -64,4 +66,15 @@ const ROLE_VIEWS: Record<Role, View[]> = {
 
 export function canOpen(role: Role, view: View): boolean {
   return ROLE_VIEWS[role].includes(view)
+}
+
+/** What each role calls a page (menu, breadcrumb and page title). */
+const ROLE_LABELS: Record<Role, Partial<Record<View, string>>> = {
+  admin: { 'Lớp học': 'Lớp hành chính', 'Môn học': 'Môn học & ca học', 'Lịch học': 'Lịch học toàn trường' },
+  teacher: { 'Lịch học': 'Lịch dạy', 'Môn học': 'Ca học của tôi', 'Lớp học': 'Lớp hành chính', 'Điểm danh': 'Phiên & lịch sử' },
+  student: {},
+}
+
+export function labelFor(role: Role, view: View): string {
+  return ROLE_LABELS[role][view] || view
 }

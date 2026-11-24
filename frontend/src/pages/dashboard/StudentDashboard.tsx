@@ -56,7 +56,7 @@ export function StudentDashboard({
   return (
     <div className="space-y-6">
       {/* Stats Cards */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      <section className="stagger grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
           icon={CalendarCheck}
           label="TỶ LỆ CHUYÊN CẦN"
@@ -96,7 +96,7 @@ export function StudentDashboard({
           <div className="p-5 border-b border-slate-100 flex items-center justify-between flex-wrap gap-2">
             <div>
               <h2 className="text-base font-bold text-slate-800">Danh sách lớp học phần</h2>
-              <p className="text-xs text-slate-500 mt-0.5">Dữ liệu đăng ký học kỳ FA26 từ cơ sở dữ liệu</p>
+              <p className="text-xs text-slate-500 mt-0.5">Các ca học bạn đang theo học</p>
             </div>
             <span className="text-xs font-semibold text-teal-700 bg-teal-50 px-2.5 py-1 rounded-md border border-teal-100">
               {classes.length} Lớp học phần
@@ -279,7 +279,7 @@ function StatCard({
     <div
       onClick={onClick}
       className={cn(
-        'bg-white rounded-xl border border-slate-200/80 p-4 shadow-xs hover:border-slate-300 transition-all flex items-start gap-3.5',
+        'lift bg-white rounded-xl border border-slate-200/80 p-4 shadow-xs flex items-start gap-3.5',
         onClick && 'cursor-pointer hover:shadow-md'
       )}
     >

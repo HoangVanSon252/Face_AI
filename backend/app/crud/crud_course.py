@@ -2,7 +2,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from app.models.course import (
     Semester, Course, ClassSection, Enrollment,
-    EnrollmentStatusEnum,
+    EnrollmentStatusEnum, SemesterStatusEnum,
 )
 from app.schemas.course import (
     SemesterCreate, CourseCreate, ClassSectionCreate, EnrollmentCreate,
@@ -13,6 +13,14 @@ from sqlalchemy.exc import IntegrityError
 
 # ─── Semester ────────────────────────────────────
 def create_semester(db: Session, data: SemesterCreate) -> Semester:
+    if data.end_date < data.start_date:
+        raise APIException(status_code=422, code="INVALID_SEMESTER_DATES", message="Ngày kết thúc phải sau ngày bắt đầu.")
+    data.code = data.code.strip().upper()
+    if data.status == SemesterStatusEnum.ACTIVE:
+        # Only one semester is current at a time.
+        db.query(Semester).filter(Semester.status == SemesterStatusEnum.ACTIVE).update(
+            {Semester.status: SemesterStatusEnum.PLANNED}, synchronize_session=False
+        )
     obj = Semester(**data.model_dump())
     db.add(obj)
     try:

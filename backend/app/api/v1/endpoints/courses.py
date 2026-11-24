@@ -47,7 +47,7 @@ def _notify_roster(db: Session, section, student_ids: list[int], added: bool) ->
         title, kind = f"Bạn được thêm vào ca học {label}", "ENROLLED"
     else:
         title, kind = f"Bạn đã được rút khỏi ca học {label}", "UNENROLLED"
-    notifications.notify(db, student_ids, kind, title, link="/classes")
+    notifications.notify(db, student_ids, kind, title, link="/schedule")
 
 
 require_admin  = dependencies.require_role([RoleEnum.ADMIN.value])
@@ -60,7 +60,7 @@ def list_administrative_classes(db: Session = Depends(dependencies.get_db), _: A
 
 
 @router.post("/student-classes", status_code=201)
-def create_administrative_class(data: AdministrativeClassPayload, db: Session = Depends(dependencies.get_db), current_user=Depends(require_staff)):
+def create_administrative_class(data: AdministrativeClassPayload, db: Session = Depends(dependencies.get_db), current_user=Depends(require_admin)):
     code = data.code.strip().upper()
     if db.query(AdministrativeClass).filter(AdministrativeClass.code == code).first():
         raise HTTPException(status_code=409, detail="Administrative class already exists")
@@ -70,7 +70,7 @@ def create_administrative_class(data: AdministrativeClassPayload, db: Session = 
 
 
 @router.patch("/student-classes/{class_id}")
-def update_administrative_class(class_id: int, data: AdministrativeClassPayload, db: Session = Depends(dependencies.get_db), current_user=Depends(require_staff)):
+def update_administrative_class(class_id: int, data: AdministrativeClassPayload, db: Session = Depends(dependencies.get_db), current_user=Depends(require_admin)):
     item = db.get(AdministrativeClass, class_id)
     if not item: raise HTTPException(status_code=404, detail="Administrative class not found")
     old_code, item.code = item.code, data.code.strip().upper()
@@ -83,7 +83,7 @@ def update_administrative_class(class_id: int, data: AdministrativeClassPayload,
 
 
 @router.delete("/student-classes/{class_id}", status_code=204)
-def delete_administrative_class(class_id: int, db: Session = Depends(dependencies.get_db), current_user=Depends(require_staff)):
+def delete_administrative_class(class_id: int, db: Session = Depends(dependencies.get_db), current_user=Depends(require_admin)):
     item = db.get(AdministrativeClass, class_id)
     if not item: raise HTTPException(status_code=404, detail="Administrative class not found")
     from app.models.user import Student
@@ -92,7 +92,7 @@ def delete_administrative_class(class_id: int, db: Session = Depends(dependencie
 
 
 @router.post("/student-classes/{class_id}/students/{student_id}", status_code=204)
-def add_student_to_administrative_class(class_id: int, student_id: int, db: Session = Depends(dependencies.get_db), current_user=Depends(require_staff)):
+def add_student_to_administrative_class(class_id: int, student_id: int, db: Session = Depends(dependencies.get_db), current_user=Depends(require_admin)):
     from app.models.user import Student
     item = db.get(AdministrativeClass, class_id)
     student = db.get(Student, student_id)
@@ -104,7 +104,7 @@ def add_student_to_administrative_class(class_id: int, student_id: int, db: Sess
 
 
 @router.delete("/student-classes/{class_id}/students/{student_id}", status_code=204)
-def remove_student_from_administrative_class(class_id: int, student_id: int, db: Session = Depends(dependencies.get_db), current_user=Depends(require_staff)):
+def remove_student_from_administrative_class(class_id: int, student_id: int, db: Session = Depends(dependencies.get_db), current_user=Depends(require_admin)):
     from app.models.user import Student
     item = db.get(AdministrativeClass, class_id)
     student = db.get(Student, student_id)
@@ -127,7 +127,7 @@ def list_semesters(
 def create_semester(
     data: SemesterCreate,
     db: Session = Depends(dependencies.get_db),
-    _: Any = Depends(require_staff),
+    _: Any = Depends(require_admin),
 ):
     return crud_course.create_semester(db, data)
 
@@ -144,7 +144,7 @@ def list_courses(
 def create_course(
     data: CourseCreate,
     db: Session = Depends(dependencies.get_db),
-    current_user=Depends(require_staff),
+    current_user=Depends(require_admin),
 ):
     course = crud_course.create_course(db, data)
     write_audit_log(db, action="COURSE_CREATED", actor_user_id=current_user.id, entity_type="COURSE", entity_id=course.id, details={"course_code": course.course_code})
@@ -170,10 +170,8 @@ def list_sections(
 def create_section(
     data: ClassSectionCreate,
     db: Session = Depends(dependencies.get_db),
-    current_user=Depends(require_staff),
+    current_user=Depends(require_admin),
 ):
-    if current_user.role == RoleEnum.LECTURER:
-        data.lecturer_id = current_user.id
     from app.models.user import Lecturer
     if db.get(Lecturer, data.lecturer_id) is None:
         raise HTTPException(status_code=422, detail="Hãy chọn giảng viên phụ trách ca học")
@@ -261,8 +259,11 @@ def update_semester(semester_id: int, data: SemesterUpdate, db: Session = Depend
 @router.delete("/semesters/{semester_id}", status_code=204)
 def delete_semester(semester_id: int, db: Session = Depends(dependencies.get_db), _: Any = Depends(require_admin)):
     from app.models.course import Semester
+    from app.models.course import ClassSection
     obj = db.get(Semester, semester_id)
     if not obj: raise HTTPException(status_code=404, detail="Semester not found")
+    if db.query(ClassSection.id).filter(ClassSection.semester_id == semester_id).first():
+        raise HTTPException(status_code=409, detail="Học kỳ đang có ca học, hãy xóa các ca học trước")
     db.delete(obj); db.commit()
 
 @router.patch("/courses/{course_id}", response_model=CourseResponse)
@@ -276,8 +277,11 @@ def update_course(course_id: int, data: CourseCreate, db: Session = Depends(depe
 @router.delete("/courses/{course_id}", status_code=204)
 def delete_course(course_id: int, db: Session = Depends(dependencies.get_db), _: Any = Depends(require_admin)):
     from app.models.course import Course
+    from app.models.course import ClassSection
     obj = db.get(Course, course_id)
     if not obj: raise HTTPException(status_code=404, detail="Course not found")
+    if db.query(ClassSection.id).filter(ClassSection.course_id == course_id).first():
+        raise HTTPException(status_code=409, detail="Môn học đang có ca học, hãy xóa các ca học trước")
     db.delete(obj); db.commit()
 
 @router.patch("/sections/{section_id}", response_model=ClassSectionResponse)
@@ -309,7 +313,7 @@ def update_section(section_id: int, data: ClassSectionUpdate, db: Session = Depe
     db.refresh(obj); return obj
 
 @router.delete("/sections/{section_id}", status_code=204)
-def delete_section(section_id: int, db: Session = Depends(dependencies.get_db), current_user=Depends(require_staff)):
+def delete_section(section_id: int, db: Session = Depends(dependencies.get_db), current_user=Depends(require_admin)):
     from app.models.course import ClassSection
     dependencies.require_section_access(db, section_id, current_user)
     obj = db.get(ClassSection, section_id)
@@ -320,7 +324,7 @@ def delete_section(section_id: int, db: Session = Depends(dependencies.get_db), 
         raise HTTPException(status_code=409, detail="Ca học đã có dữ liệu điểm danh, không thể xóa")
     notifications.notify(
         db, notifications.others(notifications.section_student_ids(db, section_id) + [obj.lecturer_id], current_user.id),
-        "SECTION_DELETED", f"Ca học {notifications.section_label(obj)} đã bị xóa", link="/classes",
+        "SECTION_DELETED", f"Ca học {notifications.section_label(obj)} đã bị xóa", link="/schedule",
     )
     db.delete(obj)
     write_audit_log(db, action="CLASS_DELETED", actor_user_id=current_user.id, entity_type="CLASS_SECTION", entity_id=section_id, details={"section_code": code})

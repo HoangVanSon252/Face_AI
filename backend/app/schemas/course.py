@@ -9,6 +9,7 @@ class SemesterCreate(BaseModel):
     name: str
     start_date: date
     end_date: date
+    status: SemesterStatusEnum = SemesterStatusEnum.PLANNED
 
 class SemesterUpdate(BaseModel):
     code: str | None = None

@@ -36,7 +36,7 @@ export function Modal({ open, isOpen, onClose, title, children, maxWidth = '480p
   return (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+      className="animate-overlay-in fixed inset-0 z-[1000] flex items-center justify-center bg-[#0d2a2f]/40 backdrop-blur-sm p-4"
       onClick={(e) => { if (e.target === overlayRef.current) onClose() }}
       aria-modal="true"
       role="dialog"

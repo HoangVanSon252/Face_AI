@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Menu, ChevronRight, Bell, CheckCircle2, X } from 'lucide-react'
 import type { Role, View, User } from '../../types'
 import { notificationService, type AppNotification } from '../../services/api'
 import { useToast } from '../common/Toast'
 import { cn } from '../../lib/utils'
+import { labelFor } from '../../lib/routes'
 
 interface TopbarProps {
   activeView: View
@@ -29,6 +30,8 @@ export function Topbar({ activeView, role, currentUser, onOpenMobileMenu }: Topb
   const [showNotifications, setShowNotifications] = useState(false)
   const [notifications, setNotifications] = useState<AppNotification[]>([])
   const { showToast } = useToast()
+  const [ring, setRing] = useState(0)
+  const panelRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
 
   const load = useCallback(async () => {
@@ -47,6 +50,7 @@ export function Topbar({ activeView, role, currentUser, onOpenMobileMenu }: Topb
       if (!item) return
       setNotifications((prev) => [item, ...prev.filter((n) => n.id !== item.id)].slice(0, 30))
       showToast(item.title, 'info')
+      setRing((n) => n + 1)
       // Pages showing the affected data reload it.
       window.dispatchEvent(new CustomEvent('data:changed', { detail: { source: 'notification', kind: item.kind } }))
     }
@@ -61,6 +65,16 @@ export function Topbar({ activeView, role, currentUser, onOpenMobileMenu }: Topb
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [load, showToast])
+
+  // Click anywhere else closes the panel.
+  useEffect(() => {
+    if (!showNotifications) return
+    const onDown = (event: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(event.target as Node)) setShowNotifications(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [showNotifications])
 
   const unreadCount = notifications.filter((n) => !n.is_read).length
 
@@ -95,7 +109,7 @@ export function Topbar({ activeView, role, currentUser, onOpenMobileMenu }: Topb
       : 'bg-[#fbe8e2] text-[#c96d58] border-[#f4c5b5]'
 
   return (
-    <header className="h-14 flex items-center justify-between px-4 bg-white border-b border-[#e8efef] sticky top-0 z-30 shrink-0">
+    <header className="h-14 flex items-center justify-between px-4 sm:px-6 bg-white/85 backdrop-blur-md border-b border-[#e8efef] sticky top-0 z-30 shrink-0">
       {/* Left: menu + breadcrumb */}
       <div className="flex items-center gap-3">
         <button
@@ -109,7 +123,7 @@ export function Topbar({ activeView, role, currentUser, onOpenMobileMenu }: Topb
         <div className="flex items-center gap-1.5 text-xs text-[#8b999d]">
           <span className="hidden sm:block">Hệ thống điểm danh AI</span>
           <ChevronRight size={13} className="hidden sm:block" />
-          <b className="text-[#172b35] text-[13px] font-bold">{activeView}</b>
+          <b key={activeView} className="animate-fade-in text-[#172b35] text-[13px] font-bold">{labelFor(role, activeView)}</b>
         </div>
       </div>
 
@@ -126,22 +140,22 @@ export function Topbar({ activeView, role, currentUser, onOpenMobileMenu }: Topb
         </span>
 
         {/* Notifications */}
-        <div className="relative">
+        <div className="relative" ref={panelRef}>
           <button
             className="relative w-9 h-9 grid place-items-center rounded-xl text-[#6e7d82] hover:bg-[#eef3f3] transition-colors"
             aria-label="Thông báo"
             onClick={() => setShowNotifications(!showNotifications)}
           >
-            <Bell size={18} />
+            <Bell key={ring} size={18} className={ring ? 'animate-bell' : undefined} />
             {unreadCount > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 grid place-items-center bg-[#c96d58] text-white text-[10px] font-bold rounded-full border-2 border-white">
+              <span key={unreadCount} className="animate-pop-in absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 grid place-items-center bg-[#c96d58] text-white text-[10px] font-bold rounded-full border-2 border-white">
                 {unreadCount > 9 ? '9+' : unreadCount}
               </span>
             )}
           </button>
 
           {showNotifications && (
-            <div className="absolute top-11 right-0 w-[300px] bg-white border border-[#e4ebeb] rounded-2xl shadow-[0_8px_30px_rgba(0,0,0,0.1)] z-50">
+            <div className="animate-drop-in absolute top-11 right-0 w-[min(340px,calc(100vw-2rem))] bg-white border border-[#e4ebeb] rounded-2xl shadow-[0_8px_30px_rgba(0,0,0,0.1)] z-50">
               <div className="flex items-center justify-between px-4 py-3 border-b border-[#e4ebeb]">
                 <span className="text-xs font-bold text-[#172b35]">Thông báo</span>
                 <div className="flex items-center gap-2">
@@ -167,13 +181,14 @@ export function Topbar({ activeView, role, currentUser, onOpenMobileMenu }: Topb
                     Chưa có thông báo nào
                   </div>
                 ) : (
-                  notifications.map((n) => (
+                  notifications.map((n, index) => (
                     <button
+                      style={{ animationDelay: `${Math.min(index, 8) * 25}ms` }}
                       type="button"
                       key={n.id}
                       onClick={() => openNotification(n)}
                       className={cn(
-                        'p-2.5 rounded-xl text-xs text-left transition-colors',
+                        'animate-fade-in p-2.5 rounded-xl text-xs text-left transition-colors',
                         !n.is_read
                           ? 'bg-[#f5fbf9] border border-[#dff2ee]'
                           : 'hover:bg-[#f8fafa]'
